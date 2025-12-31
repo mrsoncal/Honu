@@ -1,279 +1,221 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { Task } from '../types';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Textarea } from './ui/textarea';
-import { Plus, CheckCircle2, Circle } from 'lucide-react';
+import { t } from '../i18n';
 
-export function TaskList() {
-  const { tasks, patients, employees, currentUser, addTask, updateTask, deleteTask } = useApp();
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [formData, setFormData] = useState({
-    patientId: '',
-    title: '',
-    description: '',
-    priority: 'medium' as 'low' | 'medium' | 'high',
-    status: 'pending' as 'pending' | 'in-progress' | 'completed',
-    dueDate: '',
-    assignedTo: currentUser?.id || '',
-  });
+export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }) {
+  const { tasks, patients, visits, currentList, updateTask, effectiveWeekday } = useApp();
+  const { onOpenCarePlan } = props;
 
-  const handleOpenDialog = () => {
-    setFormData({
-      patientId: '',
-      title: '',
-      description: '',
-      priority: 'medium',
-      status: 'pending',
-      dueDate: new Date().toISOString().split('T')[0],
-      assignedTo: currentUser?.id || '',
-    });
-    setIsDialogOpen(true);
+  const effectiveDateISO = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Oslo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }, []);
+
+  const getAgeFromBirthDate = (birthDate: string): number | null => {
+    const d = new Date(birthDate);
+    if (Number.isNaN(d.getTime())) return null;
+
+    const now = new Date();
+    let years = now.getFullYear() - d.getFullYear();
+    const monthDiff = now.getMonth() - d.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < d.getDate())) {
+      years -= 1;
+    }
+    return years;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const patient = patients.find(p => p.id === formData.patientId);
-    const employee = employees.find(emp => emp.id === formData.assignedTo);
-    
-    if (!patient || !employee) return;
+  const listScopedTasks = useMemo(() => {
+    return currentList ? tasks.filter(task => task.listId === currentList.id) : [];
+  }, [tasks, currentList]);
 
-    const newTask: Task = {
-      ...formData,
-      id: Date.now().toString(),
-      patientName: patient.name,
-      assignedToName: employee.name,
-    };
-    addTask(newTask);
-    setIsDialogOpen(false);
-  };
-
-  const handleStatusChange = (taskId: string, newStatus: Task['status']) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (task) {
-      console.log(`Task "${task.title}" status changed from "${task.status}" to "${newStatus}"`);
-      console.log('Task details:', { 
-        id: taskId, 
-        patient: task.patientName, 
-        previousStatus: task.status, 
-        newStatus 
+  const visitsForToday = useMemo(() => {
+    if (!currentList) return [];
+    return visits
+      .filter(v => v.listId === currentList.id)
+      .filter(v => {
+        if (v.date) return v.date === effectiveDateISO;
+        if (!v.weekdays.includes(effectiveWeekday)) return false;
+        if (v.endDate && effectiveDateISO > v.endDate) return false;
+        return true;
       });
-    }
-    updateTask(taskId, { status: newStatus });
-  };
+  }, [visits, currentList, effectiveWeekday, effectiveDateISO]);
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'high': return 'destructive';
-      case 'medium': return 'default';
-      case 'low': return 'secondary';
-      default: return 'default';
-    }
-  };
+  const visitRowsForToday = useMemo(() => {
+    const rows = visitsForToday
+      .map((visit) => {
+        const patient = patients.find(p => p.id === visit.patientId);
+        if (!patient) return null;
+        const timeKey = visit.time?.trim() || 'general';
+        return { visit, patient, timeKey };
+      })
+      .filter((x): x is { visit: (typeof visitsForToday)[number]; patient: (typeof patients)[number]; timeKey: string } => Boolean(x));
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed': return <CheckCircle2 className="h-5 w-5 text-green-600" />;
-      default: return <Circle className="h-5 w-5 text-gray-400" />;
-    }
-  };
-
-  const filteredTasks = tasks
-    .filter(task => currentUser ? task.assignedTo === currentUser.id : true)
-    .filter(task => filterStatus === 'all' || task.status === filterStatus)
-    .sort((a, b) => {
-      // Sort by priority first
-      const priorityOrder = { high: 0, medium: 1, low: 2 };
-      const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
-      if (priorityDiff !== 0) return priorityDiff;
-      
-      // Then by due date
-      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+    rows.sort((a, b) => {
+      const aTime = a.timeKey;
+      const bTime = b.timeKey;
+      if (aTime === 'general' && bTime !== 'general') return 1;
+      if (bTime === 'general' && aTime !== 'general') return -1;
+      const timeDiff = aTime.localeCompare(bTime);
+      if (timeDiff !== 0) return timeDiff;
+      return a.patient.name.localeCompare(b.patient.name);
     });
 
-  const groupedByPatient = filteredTasks.reduce((acc, task) => {
-    if (!acc[task.patientId]) {
-      acc[task.patientId] = [];
-    }
-    acc[task.patientId].push(task);
-    return acc;
-  }, {} as Record<string, Task[]>);
+    return rows;
+  }, [visitsForToday, patients]);
+
+  const handleToggleAllForVisit = (args: { visitId: string; patientId: string; visitTime: string; isSpecial: boolean; allCompleted: boolean }) => {
+    const { visitId, patientId, visitTime, isSpecial, allCompleted } = args;
+
+    const visitTasks = isSpecial
+      ? listScopedTasks.filter(task => task.visitId === visitId)
+      : listScopedTasks
+        .filter(task => task.patientId === patientId)
+        .filter(task => !task.visitId)
+        .filter(task => (task.visitTime?.trim() || 'general') === visitTime);
+
+    visitTasks.forEach(task => {
+      if (allCompleted) {
+        if (task.status === 'completed') {
+          updateTask(task.id, { status: 'pending' });
+        }
+      } else {
+        if (task.status !== 'completed') {
+          updateTask(task.id, { status: 'completed' });
+        }
+      }
+    });
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2>My Tasks</h2>
-          <p className="text-muted-foreground">
-            Tasks assigned to {currentUser?.name || 'you'}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Tasks</SelectItem>
-              <SelectItem value="pending">Not Started</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-            </SelectContent>
-          </Select>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={handleOpenDialog}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Task
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md" aria-describedby={undefined}>
-              <DialogHeader>
-                <DialogTitle>Add New Task</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="patientId">Patient</Label>
-                  <Select
-                    value={formData.patientId}
-                    onValueChange={(value) => setFormData({ ...formData, patientId: value })}
-                    required
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select patient" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {patients.map((patient) => (
-                        <SelectItem key={patient.id} value={patient.id}>
-                          {patient.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="title">Task Title</Label>
-                  <Input
-                    id="title"
-                    value={formData.title}
-                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    value={formData.description}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="priority">Priority</Label>
-                  <Select
-                    value={formData.priority}
-                    onValueChange={(value: 'low' | 'medium' | 'high') => 
-                      setFormData({ ...formData, priority: value })
+            <div className="flex items-center justify-between">
+              <div>
+                <h2>{t('visitsTitle')}</h2>
+                <p className="text-muted-foreground">
+                  {currentList?.name
+                    ? t('visitsSubtitleFor', { name: currentList.name })
+                    : t('visitsSubtitleAll')}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {!currentList && (
+                <Card>
+                  <CardContent className="py-12 text-center text-muted-foreground">
+                    {t('noListSelected')}
+                  </CardContent>
+                </Card>
+              )}
+
+              {currentList && visitRowsForToday.length === 0 && (
+                <Card>
+                  <CardContent className="py-12 text-center text-muted-foreground">
+                    {t('noVisitsToday')}
+                  </CardContent>
+                </Card>
+              )}
+
+              {currentList && visitRowsForToday.map(({ visit, patient, timeKey }) => {
+                const isSpecial = visit.kind === 'special-task';
+
+                const visitTasks = isSpecial
+                  ? listScopedTasks.filter(task => task.visitId === visit.id)
+                  : listScopedTasks
+                    .filter(task => task.patientId === patient.id)
+                    .filter(task => !task.visitId)
+                    .filter(task => (task.visitTime?.trim() || 'general') === timeKey);
+
+                const totalDurationMinutes = visitTasks.reduce((sum, tk) => {
+                  const v = Number.isFinite(tk.durationMinutes) ? tk.durationMinutes : 0;
+                  return sum + v;
+                }, 0);
+
+                const allCompleted = visitTasks.length > 0 && visitTasks.every((tk) => tk.status === 'completed');
+
+                return (
+                  <Card
+                    key={visit.id}
+                    className={
+                      allCompleted
+                        ? (isSpecial ? 'bg-muted/40 border-2 border-yellow-200' : 'bg-muted/40')
+                        : (isSpecial ? 'border-2 border-yellow-400' : undefined)
                     }
                   >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="dueDate">Due Date</Label>
-                  <Input
-                    id="dueDate"
-                    type="date"
-                    value={formData.dueDate}
-                    onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button type="submit">Add Task</Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
-
-      <div className="space-y-6">
-        {Object.entries(groupedByPatient).map(([patientId, patientTasks]) => {
-          const patient = patients.find(p => p.id === patientId);
-          if (!patient) return null;
-
-          return (
-            <Card key={patientId}>
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <span>{patient.name}</span>
-                  <Badge variant="outline">{patientTasks.length} tasks</Badge>
-                </CardTitle>
-                <p className="text-sm text-muted-foreground">{patient.diagnosis}</p>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {patientTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="flex items-start gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors"
-                    >
-                      <button
-                        onClick={() => {
-                          const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
-                          handleStatusChange(task.id, nextStatus);
-                        }}
-                        className="mt-0.5"
-                      >
-                        {getStatusIcon(task.status)}
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className={task.status === 'completed' ? 'line-through text-muted-foreground' : ''}>
-                            {task.title}
-                          </h4>
-                          <Badge variant={getPriorityColor(task.priority)} className="text-xs">
-                            {task.priority}
-                          </Badge>
+                    <CardHeader>
+                      <CardTitle className="flex items-center justify-between gap-2">
+                        <span>
+                          <span className={allCompleted ? 'line-through text-muted-foreground' : undefined}>
+                            {patient.name}
+                          </span>{' '}
+                          <span className="text-foreground/70">({getAgeFromBirthDate(patient.birthDate) ?? '—'})</span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              onOpenCarePlan?.(patient.id);
+                            }}
+                          >
+                            {t('openCarePlan')}
+                          </Button>
+                          <Button
+                            type="button"
+                            onClick={() => handleToggleAllForVisit({
+                              visitId: visit.id,
+                              patientId: patient.id,
+                              visitTime: timeKey,
+                              isSpecial,
+                              allCompleted,
+                            })}
+                          >
+                            {allCompleted ? t('markAllNotCompleted') : t('completeAllTasks')}
+                          </Button>
                         </div>
-                        <p className="text-sm text-muted-foreground mb-2">{task.description}</p>
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                          <span>Due: {new Date(task.dueDate).toLocaleDateString()}</span>
-                          <span>Status: {task.status === 'pending' ? 'Not Started' : 'Completed'}</span>
+                      </CardTitle>
+                      <p className="text-sm text-muted-foreground">{patient.diagnosis}</p>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant={
+                                timeKey === 'general'
+                                  ? 'secondary'
+                                  : allCompleted
+                                    ? 'secondary'
+                                    : 'destructive'
+                              }
+                              className="text-sm"
+                            >
+                              {timeKey === 'general' ? t('carePlan') : timeKey}
+                            </Badge>
+                            <Badge variant="outline" className="text-sm">
+                              {totalDurationMinutes} min
+                            </Badge>
+                          </div>
                         </div>
+                        {visitTasks.length === 0 ? (
+                          <div className="text-sm text-muted-foreground">—</div>
+                        ) : null}
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-        {filteredTasks.length === 0 && (
-          <Card>
-            <CardContent className="py-12 text-center text-muted-foreground">
-              No tasks found. {filterStatus !== 'all' && 'Try changing the filter or '}Add a new task to get started.
-            </CardContent>
-          </Card>
-        )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
       </div>
     </div>
   );

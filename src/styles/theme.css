@@ -179,3 +179,11 @@
     line-height: 1.5;
   }
 }
+
+@layer base {
+  .ql-editor hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+  }
+}

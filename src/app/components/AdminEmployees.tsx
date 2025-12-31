@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { t } from '../i18n';
 
 export function AdminEmployees() {
   const { employees, addEmployee, updateEmployee, deleteEmployee } = useApp();
@@ -16,6 +17,8 @@ export function AdminEmployees() {
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
     name: '',
+    username: '',
+    password: '',
     role: '',
     phone: '',
     email: '',
@@ -23,14 +26,59 @@ export function AdminEmployees() {
     hireDate: '',
   });
 
+  const normalizeForUsername = (input: string): string => {
+    return input
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z]/g, '');
+  };
+
+  const baseUsernameFromName = (name: string): string => {
+    const parts = String(name)
+      .split(/[\s,]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    const first = normalizeForUsername(parts[0] ?? '');
+    const last = normalizeForUsername(parts.length > 1 ? parts[parts.length - 1] : '');
+
+    const first2 = first.slice(0, 2);
+    const last2 = last.slice(0, 2);
+
+    const base = `${first2}${last2}`.trim();
+    if (base.length >= 4) return base;
+    if (first) return first.slice(0, 4);
+    return 'user';
+  };
+
+  const uniqueUsername = (base: string, taken: Set<string>): string => {
+    const cleaned = normalizeForUsername(base) || 'user';
+    if (!taken.has(cleaned)) return cleaned;
+    let i = 2;
+    while (taken.has(`${cleaned}${i}`)) i += 1;
+    return `${cleaned}${i}`;
+  };
+
   const handleOpenDialog = (employee?: Employee) => {
     if (employee) {
       setEditingEmployee(employee);
-      setFormData(employee);
+      setFormData({
+        name: employee.name,
+        username: employee.username,
+        password: '',
+        role: employee.role,
+        phone: employee.phone,
+        email: employee.email,
+        status: employee.status,
+        hireDate: employee.hireDate,
+      });
     } else {
       setEditingEmployee(null);
       setFormData({
         name: '',
+        username: '',
+        password: '',
         role: '',
         phone: '',
         email: '',
@@ -43,11 +91,38 @@ export function AdminEmployees() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    const taken = new Set(
+      employees
+        .filter((e) => e.id !== editingEmployee?.id)
+        .map((e) => normalizeForUsername(e.username))
+    );
+
+    const username = editingEmployee
+      ? editingEmployee.username
+      : uniqueUsername(baseUsernameFromName(formData.name), taken);
+
     if (editingEmployee) {
-      updateEmployee(editingEmployee.id, formData);
+      const password = formData.password.trim();
+      updateEmployee(editingEmployee.id, {
+        name: formData.name,
+        role: formData.role,
+        phone: formData.phone,
+        email: formData.email,
+        status: formData.status,
+        hireDate: formData.hireDate,
+        ...(password ? { password } : {}),
+      });
     } else {
       const newEmployee: Employee = {
-        ...formData,
+        name: formData.name,
+        username,
+        ...(formData.password.trim() ? { password: formData.password.trim() } : {}),
+        role: formData.role,
+        phone: formData.phone,
+        email: formData.email,
+        status: formData.status,
+        hireDate: formData.hireDate,
         id: Date.now().toString(),
       };
       addEmployee(newEmployee);
@@ -56,7 +131,7 @@ export function AdminEmployees() {
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('Are you sure you want to delete this employee?')) {
+    if (confirm(t('confirmDeleteEmployee'))) {
       deleteEmployee(id);
     }
   };
@@ -65,42 +140,72 @@ export function AdminEmployees() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2>Employee Management</h2>
-          <p className="text-muted-foreground">Manage your nursing staff</p>
+          <h2>{t('employeeManagementTitle')}</h2>
+          <p className="text-muted-foreground">{t('employeeManagementSubtitle')}</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button onClick={() => handleOpenDialog()}>
               <Plus className="mr-2 h-4 w-4" />
-              Add Employee
+              {t('addEmployee')}
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-md" aria-describedby={undefined}>
+          <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
             <DialogHeader>
-              <DialogTitle>{editingEmployee ? 'Edit Employee' : 'Add New Employee'}</DialogTitle>
+              <DialogTitle>{editingEmployee ? t('editEmployee') : t('addNewEmployee')}</DialogTitle>
             </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
+                <Label htmlFor="name">{t('fullName')}</Label>
                 <Input
                   id="name"
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+                    setFormData((prev) => {
+                      if (editingEmployee) return { ...prev, name: nextName };
+                      const taken = new Set(employees.map((emp) => normalizeForUsername(emp.username)));
+                      const nextUsername = uniqueUsername(baseUsernameFromName(nextName), taken);
+                      return { ...prev, name: nextName, username: nextUsername };
+                    });
+                  }}
                   required
                 />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="role">Role</Label>
+                <Label htmlFor="username">{t('username')}</Label>
+                <Input
+                  id="username"
+                  value={editingEmployee ? editingEmployee.username : formData.username}
+                  readOnly
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="password">{t('password')}</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                />
+                {editingEmployee ? (
+                  <p className="text-xs text-muted-foreground">{t('leaveBlankToKeepPassword')}</p>
+                ) : null}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="role">{t('role')}</Label>
                 <Input
                   id="role"
                   value={formData.role}
                   onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                  placeholder="e.g., Registered Nurse"
+                  placeholder={t('rolePlaceholder')}
                   required
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">{t('email')}</Label>
                 <Input
                   id="email"
                   type="email"
@@ -110,17 +215,17 @@ export function AdminEmployees() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="phone">Phone</Label>
+                <Label htmlFor="phone">{t('phone')}</Label>
                 <Input
                   id="phone"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  placeholder="(555) 123-4567"
+                  placeholder="+47 912 34 567"
                   required
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
+                <Label htmlFor="status">{t('status')}</Label>
                 <Select
                   value={formData.status}
                   onValueChange={(value: 'active' | 'inactive') => 
@@ -131,13 +236,13 @@ export function AdminEmployees() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
+                    <SelectItem value="active">{t('active')}</SelectItem>
+                    <SelectItem value="inactive">{t('inactive')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="hireDate">Hire Date</Label>
+                <Label htmlFor="hireDate">{t('hireDate')}</Label>
                 <Input
                   id="hireDate"
                   type="date"
@@ -148,10 +253,10 @@ export function AdminEmployees() {
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  Cancel
+                  {t('cancel')}
                 </Button>
                 <Button type="submit">
-                  {editingEmployee ? 'Update' : 'Add'} Employee
+                  {editingEmployee ? t('save') : t('addEmployee')}
                 </Button>
               </div>
             </form>
@@ -163,18 +268,20 @@ export function AdminEmployees() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Contact</TableHead>
-              <TableHead>Hire Date</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>{t('fullName')}</TableHead>
+              <TableHead>{t('username')}</TableHead>
+              <TableHead>{t('role')}</TableHead>
+              <TableHead>{t('contact')}</TableHead>
+              <TableHead>{t('hireDate')}</TableHead>
+              <TableHead>{t('status')}</TableHead>
+              <TableHead className="text-right">{t('actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {employees.map((employee) => (
               <TableRow key={employee.id}>
                 <TableCell>{employee.name}</TableCell>
+                <TableCell className="font-mono text-sm">{employee.username}</TableCell>
                 <TableCell>{employee.role}</TableCell>
                 <TableCell>
                   <div className="text-sm">
@@ -185,7 +292,7 @@ export function AdminEmployees() {
                 <TableCell>{new Date(employee.hireDate).toLocaleDateString()}</TableCell>
                 <TableCell>
                   <Badge variant={employee.status === 'active' ? 'default' : 'secondary'}>
-                    {employee.status}
+                    {employee.status === 'active' ? t('active') : t('inactive')}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right">

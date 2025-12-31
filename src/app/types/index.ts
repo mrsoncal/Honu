@@ -1,6 +1,8 @@
 export interface Employee {
   id: string;
   name: string;
+  username: string;
+  password?: string;
   role: string;
   phone: string;
   email: string;
@@ -11,23 +13,35 @@ export interface Employee {
 export interface Patient {
   id: string;
   name: string;
-  age: number;
+  birthDate: string;
   address: string;
   phone: string;
   diagnosis: string;
   admissionDate: string;
   assignedEmployee?: string;
+  plan?: string;
+}
+
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+export interface VisitList {
+  id: string;
+  name: string;
+  description?: string;
+  active: boolean;
 }
 
 export interface Visit {
   id: string;
   patientId: string;
   patientName: string;
-  date: string;
-  time: string;
-  assignedTo?: string;
-  assignedToName?: string;
+  weekdays: Weekday[];
+  time?: string;
+  listId: string;
   notes?: string;
+  date?: string;
+  endDate?: string;
+  kind?: 'planned' | 'special-task';
 }
 
 export interface Task {
@@ -35,13 +49,12 @@ export interface Task {
   patientId: string;
   patientName: string;
   visitId?: string;
+  visitTime?: string;
   title: string;
   description: string;
-  priority: 'low' | 'medium' | 'high';
   status: 'pending' | 'in-progress' | 'completed';
-  dueDate: string;
-  assignedTo: string;
-  assignedToName: string;
+  durationMinutes: number;
+  listId: string;
 }
 
 export interface PatientDocument {

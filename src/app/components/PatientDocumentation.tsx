@@ -10,9 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from './ui/textarea';
 import { Separator } from './ui/separator';
 import { Plus, FileText, Trash2 } from 'lucide-react';
+import { t } from '../i18n';
 
 export function PatientDocumentation() {
-  const { patients, documents, currentUser, addDocument } = useApp();
+  const { patients, documents, currentEmployee, addDocument } = useApp();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<string>('');
   const [formData, setFormData] = useState({
@@ -50,15 +51,15 @@ export function PatientDocumentation() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
+    if (!currentEmployee) return;
 
     const newDocument: PatientDocument = {
       id: Date.now().toString(),
       patientId: formData.patientId,
       date: formData.date,
       time: formData.time,
-      documentedBy: currentUser.id,
-      documentedByName: currentUser.name,
+      documentedBy: currentEmployee.id,
+      documentedByName: currentEmployee.name,
       vitalSigns: {
         temperature: formData.temperature || undefined,
         bloodPressure: formData.bloodPressure || undefined,
@@ -109,16 +110,16 @@ export function PatientDocumentation() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2>Patient Documentation</h2>
-          <p className="text-muted-foreground">Record patient care and observations</p>
+          <h2>{t('documentationTitle')}</h2>
+          <p className="text-muted-foreground">{t('documentationSubtitle')}</p>
         </div>
         <div className="flex gap-2">
           <Select value={selectedPatient} onValueChange={setSelectedPatient}>
             <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="All Patients" />
+              <SelectValue placeholder={t('allPatients')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Patients</SelectItem>
+              <SelectItem value="all">{t('allPatients')}</SelectItem>
               {patients.map((patient) => (
                 <SelectItem key={patient.id} value={patient.id}>
                   {patient.name}
@@ -130,24 +131,24 @@ export function PatientDocumentation() {
             <DialogTrigger asChild>
               <Button onClick={handleOpenDialog}>
                 <Plus className="mr-2 h-4 w-4" />
-                New Documentation
+                {t('newDocumentation')}
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
               <DialogHeader>
-                <DialogTitle>Patient Care Documentation</DialogTitle>
+                <DialogTitle>{t('patientCareDocumentation')}</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2 space-y-2">
-                    <Label htmlFor="patientId">Patient</Label>
+                    <Label htmlFor="patientId">{t('patient')}</Label>
                     <Select
                       value={formData.patientId}
                       onValueChange={(value) => setFormData({ ...formData, patientId: value })}
                       required
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select patient" />
+                        <SelectValue placeholder={t('selectPatient')} />
                       </SelectTrigger>
                       <SelectContent>
                         {patients.map((patient) => (
@@ -159,7 +160,7 @@ export function PatientDocumentation() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="date">Date</Label>
+                    <Label htmlFor="date">{t('date')}</Label>
                     <Input
                       id="date"
                       type="date"
@@ -169,7 +170,7 @@ export function PatientDocumentation() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="time">Time</Label>
+                    <Label htmlFor="time">{t('time')}</Label>
                     <Input
                       id="time"
                       type="time"
@@ -183,49 +184,49 @@ export function PatientDocumentation() {
                 <Separator />
 
                 <div>
-                  <h3 className="mb-3">Vital Signs</h3>
+                  <h3 className="mb-3">{t('vitalSigns')}</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="temperature">Temperature</Label>
+                      <Label htmlFor="temperature">{t('temperature')}</Label>
                       <Input
                         id="temperature"
-                        placeholder="e.g., 98.6°F"
+                        placeholder={t('documentationTemperaturePlaceholder')}
                         value={formData.temperature}
                         onChange={(e) => setFormData({ ...formData, temperature: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="bloodPressure">Blood Pressure</Label>
+                      <Label htmlFor="bloodPressure">{t('bloodPressure')}</Label>
                       <Input
                         id="bloodPressure"
-                        placeholder="e.g., 120/80"
+                        placeholder={t('documentationBloodPressurePlaceholder')}
                         value={formData.bloodPressure}
                         onChange={(e) => setFormData({ ...formData, bloodPressure: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="heartRate">Heart Rate (bpm)</Label>
+                      <Label htmlFor="heartRate">{t('heartRate')} (bpm)</Label>
                       <Input
                         id="heartRate"
-                        placeholder="e.g., 72"
+                        placeholder={t('documentationHeartRatePlaceholder')}
                         value={formData.heartRate}
                         onChange={(e) => setFormData({ ...formData, heartRate: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="respiratoryRate">Respiratory Rate</Label>
+                      <Label htmlFor="respiratoryRate">{t('respiratoryRate')}</Label>
                       <Input
                         id="respiratoryRate"
-                        placeholder="e.g., 16"
+                        placeholder={t('documentationRespiratoryRatePlaceholder')}
                         value={formData.respiratoryRate}
                         onChange={(e) => setFormData({ ...formData, respiratoryRate: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2 col-span-2">
-                      <Label htmlFor="oxygenSaturation">Oxygen Saturation (%)</Label>
+                      <Label htmlFor="oxygenSaturation">{t('oxygenSaturation')}</Label>
                       <Input
                         id="oxygenSaturation"
-                        placeholder="e.g., 98%"
+                        placeholder={t('documentationOxygenSaturationPlaceholder')}
                         value={formData.oxygenSaturation}
                         onChange={(e) => setFormData({ ...formData, oxygenSaturation: e.target.value })}
                       />
@@ -237,33 +238,33 @@ export function PatientDocumentation() {
 
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <h3>Medications Administered</h3>
+                    <h3>{t('medicationsAdministered')}</h3>
                     <Button type="button" variant="outline" size="sm" onClick={addMedicationField}>
                       <Plus className="h-4 w-4 mr-1" />
-                      Add Medication
+                      {t('addMedication')}
                     </Button>
                   </div>
                   <div className="space-y-3">
                     {formData.medications.map((med, index) => (
                       <div key={index} className="grid grid-cols-12 gap-2 items-end">
                         <div className="col-span-5 space-y-2">
-                          <Label>Medication Name</Label>
+                          <Label>{t('medicationName')}</Label>
                           <Input
-                            placeholder="e.g., Aspirin"
+                            placeholder={t('documentationMedicationNamePlaceholder')}
                             value={med.name}
                             onChange={(e) => updateMedication(index, 'name', e.target.value)}
                           />
                         </div>
                         <div className="col-span-3 space-y-2">
-                          <Label>Dosage</Label>
+                          <Label>{t('dosage')}</Label>
                           <Input
-                            placeholder="e.g., 100mg"
+                            placeholder={t('documentationDosagePlaceholder')}
                             value={med.dosage}
                             onChange={(e) => updateMedication(index, 'dosage', e.target.value)}
                           />
                         </div>
                         <div className="col-span-3 space-y-2">
-                          <Label>Time</Label>
+                          <Label>{t('time')}</Label>
                           <Input
                             type="time"
                             value={med.time}
@@ -291,30 +292,30 @@ export function PatientDocumentation() {
 
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="activities">Activities & Mobility</Label>
+                    <Label htmlFor="activities">{t('activitiesMobility')}</Label>
                     <Textarea
                       id="activities"
-                      placeholder="Describe patient's activities, mobility, and exercise..."
+                      placeholder={t('documentationActivitiesPlaceholder')}
                       value={formData.activities}
                       onChange={(e) => setFormData({ ...formData, activities: e.target.value })}
                       rows={3}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="meals">Meals & Nutrition</Label>
+                    <Label htmlFor="meals">{t('mealsNutrition')}</Label>
                     <Textarea
                       id="meals"
-                      placeholder="Document food intake, appetite, and hydration..."
+                      placeholder={t('documentationMealsPlaceholder')}
                       value={formData.meals}
                       onChange={(e) => setFormData({ ...formData, meals: e.target.value })}
                       rows={3}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="notes">Clinical Notes & Observations</Label>
+                    <Label htmlFor="notes">{t('clinicalNotesObservations')}</Label>
                     <Textarea
                       id="notes"
-                      placeholder="Additional observations, concerns, or important notes..."
+                      placeholder={t('documentationNotesPlaceholder')}
                       value={formData.notes}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                       rows={4}
@@ -325,9 +326,9 @@ export function PatientDocumentation() {
 
                 <div className="flex justify-end gap-2">
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancel
+                    {t('cancel')}
                   </Button>
-                  <Button type="submit">Save Documentation</Button>
+                  <Button type="submit">{t('saveDocumentation')}</Button>
                 </div>
               </form>
             </DialogContent>
@@ -347,7 +348,7 @@ export function PatientDocumentation() {
                   <div>
                     <CardTitle>{patient.name}</CardTitle>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {new Date(doc.date).toLocaleDateString()} at {doc.time} • Documented by {doc.documentedByName}
+                      {new Date(doc.date).toLocaleDateString()} kl. {doc.time} • {t('documentedBy')} {doc.documentedByName}
                     </p>
                   </div>
                   <FileText className="h-5 w-5 text-muted-foreground" />
@@ -356,11 +357,11 @@ export function PatientDocumentation() {
               <CardContent className="space-y-4">
                 {Object.values(doc.vitalSigns).some(v => v) && (
                   <div>
-                    <h4 className="mb-2">Vital Signs</h4>
+                    <h4 className="mb-2">{t('vitalSigns')}</h4>
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                       {doc.vitalSigns.temperature && (
                         <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">Temperature</div>
+                          <div className="text-xs text-muted-foreground">{t('temperature')}</div>
                           <div>{doc.vitalSigns.temperature}</div>
                         </div>
                       )}
@@ -372,19 +373,19 @@ export function PatientDocumentation() {
                       )}
                       {doc.vitalSigns.heartRate && (
                         <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">Heart Rate</div>
+                          <div className="text-xs text-muted-foreground">{t('heartRate')}</div>
                           <div>{doc.vitalSigns.heartRate} bpm</div>
                         </div>
                       )}
                       {doc.vitalSigns.respiratoryRate && (
                         <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">Resp. Rate</div>
+                          <div className="text-xs text-muted-foreground">{t('respiratoryRate')}</div>
                           <div>{doc.vitalSigns.respiratoryRate}</div>
                         </div>
                       )}
                       {doc.vitalSigns.oxygenSaturation && (
                         <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">O2 Sat</div>
+                          <div className="text-xs text-muted-foreground">{t('oxygenSaturation')}</div>
                           <div>{doc.vitalSigns.oxygenSaturation}</div>
                         </div>
                       )}
@@ -394,12 +395,12 @@ export function PatientDocumentation() {
 
                 {doc.medications.length > 0 && (
                   <div>
-                    <h4 className="mb-2">Medications</h4>
+                    <h4 className="mb-2">{t('medicationsAdministered')}</h4>
                     <div className="space-y-1">
                       {doc.medications.map((med, index) => (
                         <div key={index} className="text-sm p-2 bg-accent/30 rounded">
                           <span>{med.name}</span> - <span className="text-muted-foreground">{med.dosage}</span>
-                          {med.time && <span className="text-muted-foreground"> at {med.time}</span>}
+                          {med.time && <span className="text-muted-foreground"> kl. {med.time}</span>}
                         </div>
                       ))}
                     </div>
@@ -408,21 +409,21 @@ export function PatientDocumentation() {
 
                 {doc.activities && (
                   <div>
-                    <h4 className="mb-1">Activities & Mobility</h4>
+                    <h4 className="mb-1">{t('activitiesMobility')}</h4>
                     <p className="text-sm text-muted-foreground">{doc.activities}</p>
                   </div>
                 )}
 
                 {doc.meals && (
                   <div>
-                    <h4 className="mb-1">Meals & Nutrition</h4>
+                    <h4 className="mb-1">{t('mealsNutrition')}</h4>
                     <p className="text-sm text-muted-foreground">{doc.meals}</p>
                   </div>
                 )}
 
                 {doc.notes && (
                   <div>
-                    <h4 className="mb-1">Clinical Notes</h4>
+                    <h4 className="mb-1">{t('clinicalNotes')}</h4>
                     <p className="text-sm text-muted-foreground">{doc.notes}</p>
                   </div>
                 )}
@@ -433,7 +434,7 @@ export function PatientDocumentation() {
         {sortedDocuments.length === 0 && (
           <Card>
             <CardContent className="py-12 text-center text-muted-foreground">
-              No documentation found. Click "New Documentation" to add patient records.
+              {t('noDocumentationFound')}
             </CardContent>
           </Card>
         )}
