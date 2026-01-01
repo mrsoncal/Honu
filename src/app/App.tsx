@@ -21,11 +21,13 @@ type View = 'admin' | 'tasks' | 'documentation';
 
 function AppContent() {
   const { currentEmployee, currentList, lists, setCurrentList, patients, visits, updatePatient, effectiveWeekday, devWeekdayOverride, shiftDevWeekday, clearDevWeekdayOverride } = useApp();
+  const isDevBuild = import.meta.env.DEV;
   const [currentView, setCurrentView] = useState<View>('tasks');
   const [adminTab, setAdminTab] = useState<'employees' | 'patients' | 'lists'>('employees');
   const [i18nEnabled, setI18nEnabledState] = useState(getI18nEnabled());
   const [carePlanScreen, setCarePlanScreen] = useState<null | { patientId: string; mode: 'view' | 'edit' }>(null);
   const [devButtonsEnabled, setDevButtonsEnabled] = useState<boolean>(() => {
+    if (!import.meta.env.DEV) return false;
     try {
       const raw = window.localStorage.getItem('dev:headerDevButtonsEnabled');
       if (raw === null) return true;
@@ -36,12 +38,13 @@ function AppContent() {
   });
 
   useEffect(() => {
+    if (!isDevBuild) return;
     try {
       window.localStorage.setItem('dev:headerDevButtonsEnabled', devButtonsEnabled ? '1' : '0');
     } catch {
       // ignore
     }
-  }, [devButtonsEnabled]);
+  }, [devButtonsEnabled, isDevBuild]);
 
   const closeCarePlanScreen = () => {
     if (!carePlanScreen) return;
@@ -72,7 +75,7 @@ function AppContent() {
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
                 <img
-                  src="/images/honu-logo.png"
+                  src={`${import.meta.env.BASE_URL}images/honu-logo.png`}
                   alt="Honu"
                   className="h-6 w-6 object-contain"
                 />
@@ -132,7 +135,7 @@ function AppContent() {
                 </SelectContent>
               </Select>
 
-              {devButtonsEnabled && (
+              {isDevBuild && devButtonsEnabled && (
                 <>
                   <Button
                     variant="destructive"
@@ -328,10 +331,12 @@ function AppContent() {
         <div className={`${pageX} relative text-center text-sm text-muted-foreground`}>
           <p>Honu AS © {new Date().getFullYear()} – {t('appSubtitle')}</p>
 
-          <div className="absolute bottom-0 right-0 flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">DEV</span>
-            <Switch checked={devButtonsEnabled} onCheckedChange={setDevButtonsEnabled} />
-          </div>
+          {isDevBuild && (
+            <div className="absolute bottom-0 right-0 flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">DEV</span>
+              <Switch checked={devButtonsEnabled} onCheckedChange={setDevButtonsEnabled} />
+            </div>
+          )}
         </div>
       </footer>
     </div>

@@ -10,13 +10,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from './ui/context-menu';
-import { Plus, Pencil, Trash2, FilePenLine } from 'lucide-react';
+import { Plus, Pencil, Trash2, FilePenLine, Pause } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { t } from '../i18n';
 import { getListColorStyle } from '../utils/listColors';
 
 import clipboardStarIcon from '../../../images/clipboard_start_icon.png';
+
+type PatientPause = {
+  from: string; // YYYY-MM-DD (Oslo)
+  until: string | null; // YYYY-MM-DD (Oslo) or null for indefinite
+};
 
 export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => void }) {
   const { patients, employees, lists, visits, currentList, addPatient, updatePatient, deletePatient, addTask, addVisit, updateVisit, deleteVisit } = useApp();
@@ -26,6 +31,23 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [patientSearch, setPatientSearch] = useState('');
   const [visitListSearch, setVisitListSearch] = useState('');
+
+  const [patientPauseById, setPatientPauseById] = useState<Record<string, PatientPause>>(() => {
+    try {
+      const raw = localStorage.getItem('honu.patientPause');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed as Record<string, PatientPause>;
+    } catch {
+      return {};
+    }
+  });
+
+  const [pauseDialogOpen, setPauseDialogOpen] = useState(false);
+  const [pausePatientId, setPausePatientId] = useState<string>('');
+  const [pauseReturnDate, setPauseReturnDate] = useState<string>('');
+  const [pauseIndefinite, setPauseIndefinite] = useState<boolean>(false);
 
   const PAGE_SIZE = 10;
   const [patientsPage, setPatientsPage] = useState(1);
@@ -64,6 +86,30 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     const minutes = Number(m[2]);
     if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
     return hours * 60 + minutes;
+  };
+
+  const addDaysISO = (iso: string, days: number): string => {
+    try {
+      const d = new Date(`${iso}T12:00:00`);
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
+    } catch {
+      return iso;
+    }
+  };
+
+  const isPausedOnDate = (pause: PatientPause | undefined, dateISO: string): boolean => {
+    if (!pause) return false;
+    if (pause.until === null) return dateISO >= pause.from;
+    return dateISO >= pause.from && dateISO <= pause.until;
+  };
+
+  const pauseLabelForPatient = (patientId: string, dateISO: string): string | null => {
+    const pause = patientPauseById[patientId];
+    if (!isPausedOnDate(pause, dateISO)) return null;
+    if (!pause) return null;
+    if (pause.until === null) return t('indefinite');
+    return pause.until;
   };
 
   const timeIsAfterEveningRecommendationCutoff = (time: string): boolean => {
@@ -476,6 +522,23 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     } catch {
       return new Date().toISOString().slice(0, 10);
     }
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('honu.patientPause', JSON.stringify(patientPauseById));
+    } catch {
+      // Ignore storage errors (private mode / quota).
+    }
+  }, [patientPauseById]);
+
+  const openPauseDialog = (patientId: string) => {
+    const today = getOsloDateISO();
+    const existing = patientPauseById[patientId];
+    setPausePatientId(patientId);
+    setPauseIndefinite(existing?.until === null);
+    setPauseReturnDate(existing?.until ?? addDaysISO(today, 7));
+    setPauseDialogOpen(true);
   };
 
   const handleOpenSpecialTaskDialog = (patient: Patient) => {
@@ -1601,6 +1664,112 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={pauseDialogOpen}
+        onOpenChange={(open) => {
+          setPauseDialogOpen(open);
+          if (!open) {
+            setPausePatientId('');
+            setPauseReturnDate('');
+            setPauseIndefinite(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>{t('pauseVisitsDialogTitle')}</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              {patients.find((p) => p.id === pausePatientId)?.name ?? ''}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="pauseReturnDate">{t('returnDate')}</Label>
+              <Input
+                id="pauseReturnDate"
+                type="date"
+                value={pauseReturnDate}
+                onChange={(e) => setPauseReturnDate(e.target.value)}
+                disabled={pauseIndefinite}
+              />
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={pauseIndefinite} onCheckedChange={(v) => setPauseIndefinite(v === true)} />
+              {t('indefinite')}
+            </label>
+
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                {pausePatientId && patientPauseById[pausePatientId] ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      if (!pausePatientId) return;
+                      setPatientPauseById((prev) => {
+                        const next = { ...prev };
+                        delete next[pausePatientId];
+                        return next;
+                      });
+                      setPauseDialogOpen(false);
+                    }}
+                  >
+                    {t('clearPause')}
+                  </Button>
+                ) : (
+                  <div />
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" onClick={() => setPauseDialogOpen(false)}>
+                  {t('cancel')}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (!pausePatientId) return;
+                    const today = getOsloDateISO();
+
+                    if (pauseIndefinite) {
+                      setPatientPauseById((prev) => ({
+                        ...prev,
+                        [pausePatientId]: { from: today, until: null },
+                      }));
+                      setPauseDialogOpen(false);
+                      return;
+                    }
+
+                    const until = pauseReturnDate.trim();
+                    if (!until) return;
+                    if (until < today) {
+                      setPatientPauseById((prev) => {
+                        const next = { ...prev };
+                        delete next[pausePatientId];
+                        return next;
+                      });
+                      setPauseDialogOpen(false);
+                      return;
+                    }
+
+                    setPatientPauseById((prev) => ({
+                      ...prev,
+                      [pausePatientId]: { from: today, until },
+                    }));
+                    setPauseDialogOpen(false);
+                  }}
+                >
+                  {t('save')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Card className="mt-8">
         <CardHeader className="flex flex-row items-center justify-between gap-6">
           <CardTitle>{t('visitListsTitle')}</CardTitle>
@@ -1629,6 +1798,8 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
             <TableBody>
               {pagedVisitGroups.map((row) => {
                 const patient = patients.find((p) => p.id === row.patientId);
+                const today = getOsloDateISO();
+                const pauseLabel = row.patientId ? pauseLabelForPatient(row.patientId, today) : null;
 
                 return (
                   <TableRow key={row.patientId}>
@@ -1669,6 +1840,20 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openPauseDialog(row.patientId)}
+                          title={t('pauseVisits')}
+                          aria-label={t('pauseVisits')}
+                        >
+                          <Pause className="h-4 w-4 text-destructive" />
+                        </Button>
+                        {pauseLabel ? (
+                          <Badge variant="outline" className="rounded-full text-destructive border-destructive/30 text-sm">
+                            {pauseLabel}
+                          </Badge>
+                        ) : null}
                         <Button
                           variant="ghost"
                           size="sm"

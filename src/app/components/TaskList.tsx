@@ -10,6 +10,11 @@ import { t } from '../i18n';
 import { Plus } from 'lucide-react';
 import { NewDocumentationDialog } from './NewDocumentationDialog';
 
+type PatientPause = {
+  from: string; // YYYY-MM-DD (Oslo)
+  until: string | null; // YYYY-MM-DD (Oslo) or null for indefinite
+};
+
 export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }) {
   const { tasks, patients, visits, lists, currentList, updateTask, effectiveWeekday, listPatientAssignments } = useApp();
   const { onOpenCarePlan } = props;
@@ -66,11 +71,24 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
     }
   });
 
+  const [patientPauseById] = useState<Record<string, PatientPause>>(() => {
+    try {
+      const raw = localStorage.getItem('honu.patientPause');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed as Record<string, PatientPause>;
+    } catch {
+      return {};
+    }
+  });
+
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [moveVisitId, setMoveVisitId] = useState<string>('');
   const [moveVisitTime, setMoveVisitTime] = useState<string>('');
   const [moveToBaseListId, setMoveToBaseListId] = useState<string>('');
   const [moveFromBaseListId, setMoveFromBaseListId] = useState<string>('');
+
 
   const effectiveDateISO = useMemo(() => {
     try {
@@ -109,6 +127,12 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
   const activeBaseLists = useMemo(() => {
     return lists.filter((l) => l.active && !l.id.endsWith(EVENING_LIST_ID_SUFFIX));
   }, [lists]);
+
+  const isPausedOnDate = (pause: PatientPause | undefined, dateISO: string): boolean => {
+    if (!pause) return false;
+    if (pause.until === null) return dateISO >= pause.from;
+    return dateISO >= pause.from && dateISO <= pause.until;
+  };
 
   const getAgeFromBirthDate = (birthDate: string): number | null => {
     const d = new Date(birthDate);
@@ -153,12 +177,13 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
     return visits
       .filter(v => effectiveListIdForVisit(v) === currentList.id)
       .filter(v => {
+        if (isPausedOnDate(patientPauseById[v.patientId], effectiveDateISO)) return false;
         if (v.date) return v.date === effectiveDateISO;
         if (!v.weekdays.includes(effectiveWeekday)) return false;
         if (v.endDate && effectiveDateISO > v.endDate) return false;
         return true;
       });
-  }, [visits, currentList, effectiveWeekday, effectiveDateISO, visitMoveOverrides]);
+  }, [visits, currentList, effectiveWeekday, effectiveDateISO, visitMoveOverrides, patientPauseById]);
 
   const openMoveDialog = (visit: (typeof visitsForToday)[number]) => {
     const currentEffective = effectiveListIdForVisit(visit);

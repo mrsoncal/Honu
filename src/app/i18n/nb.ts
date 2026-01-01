@@ -215,4 +215,9 @@ export const nb = {
   documentationNotesPlaceholder: 'Tilleggsobservasjoner, bekymringer eller viktige notater…',
   showDetails: 'Vis detaljer',
   noDocumentationFound: 'Ingen dokumentasjon funnet. Klikk "Ny dokumentasjon" for å legge til.',
+  pauseVisits: 'Pause besøk',
+  pauseVisitsDialogTitle: 'Pause besøk',
+  returnDate: 'Returdato',
+  indefinite: 'ubestemt',
+  clearPause: 'Fjern pause',
 } as const;

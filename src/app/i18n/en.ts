@@ -215,4 +215,9 @@ export const en = {
   documentationNotesPlaceholder: 'Additional observations, concerns, or important notes…',
   showDetails: 'Show details',
   noDocumentationFound: 'No documentation found. Click "New documentation" to add records.',
+    pauseVisits: 'Pause visits',
+    pauseVisitsDialogTitle: 'Pause visits',
+    returnDate: 'Return date',
+    indefinite: 'indefinite',
+    clearPause: 'Clear pause',
 } as const;
