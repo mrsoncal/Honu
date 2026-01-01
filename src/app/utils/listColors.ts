@@ -42,4 +42,3 @@ export function getListColorStyle(token?: VisitList['color'], opts?: { isEvening
   const style: React.CSSProperties = { backgroundColor };
   return style;
 }
-
