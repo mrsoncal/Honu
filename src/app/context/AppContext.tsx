@@ -338,6 +338,48 @@ const initialDocuments: PatientDocument[] = [
     meals: 'Spiste ca. 75% av frokost. God appetitt.',
     notes: 'Operasjonssår gror fint. Ingen tegn til infeksjon. Pasienten oppgir smerte 3/10.',
   },
+  {
+    id: 'doc-emma-2026-01-01-0830',
+    patientId: '19',
+    date: '2026-01-01',
+    time: '08:30',
+    documentedBy: 'dev',
+    documentedByName: 'Dev',
+    vitalSigns: {
+      temperature: '36,8°C',
+      bloodPressure: '132/84',
+      heartRate: '76',
+      respiratoryRate: '16',
+      oxygenSaturation: '97%',
+    },
+    medications: [
+      { name: 'Metformin', dosage: '500 mg', time: '08:30' },
+    ],
+    activities: 'Målt blodsukker, gjennomført fotkontroll. Kort gåtur i leiligheten med pauser.',
+    meals: 'Frokost: yoghurt og knekkebrød. Drakk et glass vann.',
+    notes: 'Pasienten virker i godt humør. Kapillær glukose før frokost: 7,8 mmol/L. Ingen nye sår/blemmer på føtter. Avtalt videre oppfølging og kostråd.',
+  },
+  {
+    id: 'doc-victor-2026-01-01-1415',
+    patientId: '24',
+    date: '2026-01-01',
+    time: '14:15',
+    documentedBy: 'dev',
+    documentedByName: 'Dev',
+    vitalSigns: {
+      temperature: '36,7°C',
+      bloodPressure: '128/82',
+      heartRate: '70',
+      respiratoryRate: '15',
+      oxygenSaturation: '98%',
+    },
+    medications: [
+      { name: 'Insulin (hurtigvirkende)', dosage: '4 IE', time: '14:15' },
+    ],
+    activities: 'Vurdert injeksjonssteder og gjennomgått teknikk. Påminnet om rotasjon av stikksted.',
+    meals: 'Lunsj: suppe og brød. God væskeinntak i dag.',
+    notes: 'Diabetesoppfølging. Pasienten oppgir noe svingende blodsukker siste døgn. Ingen tegn til hypoglykemi i dag. Veiledning gitt om måling før måltid og registrering i egen logg.',
+  },
 ];
 
 const initialLists: VisitList[] = [
