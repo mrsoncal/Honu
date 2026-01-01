@@ -1,104 +1,86 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { PatientDocument } from '../types';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
+import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from './ui/command';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Textarea } from './ui/textarea';
-import { Separator } from './ui/separator';
-import { Plus, FileText, Trash2 } from 'lucide-react';
+import { Plus, FileText, Search } from 'lucide-react';
 import { t } from '../i18n';
+import { NewDocumentationDialog } from './NewDocumentationDialog';
 
 export function PatientDocumentation() {
-  const { patients, documents, currentEmployee, addDocument } = useApp();
+  const { patients, documents, currentEmployee, currentList, visits, effectiveWeekday } = useApp();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isAnyPatientSearchOpen, setIsAnyPatientSearchOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<string>('');
-  const [formData, setFormData] = useState({
-    patientId: '',
-    date: new Date().toISOString().split('T')[0],
-    time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-    temperature: '',
-    bloodPressure: '',
-    heartRate: '',
-    respiratoryRate: '',
-    oxygenSaturation: '',
-    medications: [{ name: '', dosage: '', time: '' }],
-    activities: '',
-    meals: '',
-    notes: '',
-  });
+  const [searchedPatientId, setSearchedPatientId] = useState<string | null>(null);
 
-  const handleOpenDialog = () => {
-    setFormData({
-      patientId: '',
-      date: new Date().toISOString().split('T')[0],
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      temperature: '',
-      bloodPressure: '',
-      heartRate: '',
-      respiratoryRate: '',
-      oxygenSaturation: '',
-      medications: [{ name: '', dosage: '', time: '' }],
-      activities: '',
-      meals: '',
-      notes: '',
-    });
-    setIsDialogOpen(true);
-  };
+  const effectiveDateISO = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Oslo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentEmployee) return;
+  const todayVisitPatientIds = useMemo(() => {
+    if (!currentList) return null;
 
-    const newDocument: PatientDocument = {
-      id: Date.now().toString(),
-      patientId: formData.patientId,
-      date: formData.date,
-      time: formData.time,
-      documentedBy: currentEmployee.id,
-      documentedByName: currentEmployee.name,
-      vitalSigns: {
-        temperature: formData.temperature || undefined,
-        bloodPressure: formData.bloodPressure || undefined,
-        heartRate: formData.heartRate || undefined,
-        respiratoryRate: formData.respiratoryRate || undefined,
-        oxygenSaturation: formData.oxygenSaturation || undefined,
-      },
-      medications: formData.medications.filter(med => med.name),
-      activities: formData.activities,
-      meals: formData.meals,
-      notes: formData.notes,
+    const overrides: Record<string, string> = (() => {
+      try {
+        const raw = localStorage.getItem('honu.visitMoveOverrides');
+        if (!raw) return {};
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object') return {};
+        return parsed as Record<string, string>;
+      } catch {
+        return {};
+      }
+    })();
+
+    const moveKeyForVisit = (visitId: string) => `${effectiveDateISO}|${visitId}`;
+    const effectiveListIdForVisit = (visit: (typeof visits)[number]): string => {
+      return overrides[moveKeyForVisit(visit.id)] ?? visit.listId;
     };
-    addDocument(newDocument);
-    setIsDialogOpen(false);
-  };
 
-  const addMedicationField = () => {
-    setFormData({
-      ...formData,
-      medications: [...formData.medications, { name: '', dosage: '', time: '' }],
-    });
-  };
+    const ids = new Set<string>();
+    for (const v of visits) {
+      if (effectiveListIdForVisit(v) !== currentList.id) continue;
 
-  const removeMedicationField = (index: number) => {
-    setFormData({
-      ...formData,
-      medications: formData.medications.filter((_, i) => i !== index),
-    });
-  };
+      const isToday = v.date
+        ? v.date === effectiveDateISO
+        : v.weekdays.includes(effectiveWeekday) && (!v.endDate || effectiveDateISO <= v.endDate);
+      if (!isToday) continue;
 
-  const updateMedication = (index: number, field: string, value: string) => {
-    const newMedications = [...formData.medications];
-    newMedications[index] = { ...newMedications[index], [field]: value };
-    setFormData({ ...formData, medications: newMedications });
-  };
+      ids.add(v.patientId);
+    }
+    return Array.from(ids);
+  }, [currentList, visits, effectiveWeekday, effectiveDateISO]);
 
-  const filteredDocuments = selectedPatient && selectedPatient !== 'all'
-    ? documents.filter(doc => doc.patientId === selectedPatient)
+  const visiblePatients = todayVisitPatientIds
+    ? patients.filter((p) => todayVisitPatientIds.includes(p.id))
+    : patients;
+
+  const baseDocuments = todayVisitPatientIds
+    ? documents.filter((doc) => todayVisitPatientIds.includes(doc.patientId))
     : documents;
+
+  const scopedDocuments = searchedPatientId
+    ? documents.filter((doc) => doc.patientId === searchedPatientId)
+    : baseDocuments;
+
+  const filteredDocuments = searchedPatientId
+    ? scopedDocuments
+    : (selectedPatient && selectedPatient !== 'all'
+        ? scopedDocuments.filter(doc => doc.patientId === selectedPatient)
+        : scopedDocuments);
 
   const sortedDocuments = [...filteredDocuments].sort((a, b) => {
     const dateA = new Date(`${a.date} ${a.time}`);
@@ -114,225 +96,84 @@ export function PatientDocumentation() {
           <p className="text-muted-foreground">{t('documentationSubtitle')}</p>
         </div>
         <div className="flex gap-2">
-          <Select value={selectedPatient} onValueChange={setSelectedPatient}>
+          <Select
+            value={selectedPatient}
+            onValueChange={(v) => {
+              setSelectedPatient(v);
+              setSearchedPatientId(null);
+            }}
+          >
             <SelectTrigger className="w-[200px]">
               <SelectValue placeholder={t('allPatients')} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('allPatients')}</SelectItem>
-              {patients.map((patient) => (
+              {visiblePatients.map((patient) => (
                 <SelectItem key={patient.id} value={patient.id}>
                   {patient.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={handleOpenDialog}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('newDocumentation')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
-              <DialogHeader>
-                <DialogTitle>{t('patientCareDocumentation')}</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="col-span-2 space-y-2">
-                    <Label htmlFor="patientId">{t('patient')}</Label>
-                    <Select
-                      value={formData.patientId}
-                      onValueChange={(value) => setFormData({ ...formData, patientId: value })}
-                      required
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('selectPatient')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {patients.map((patient) => (
-                          <SelectItem key={patient.id} value={patient.id}>
-                            {patient.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="date">{t('date')}</Label>
-                    <Input
-                      id="date"
-                      type="date"
-                      value={formData.date}
-                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="time">{t('time')}</Label>
-                    <Input
-                      id="time"
-                      type="time"
-                      value={formData.time}
-                      onChange={(e) => setFormData({ ...formData, time: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
 
-                <Separator />
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon"
+            title={t('searchPatients')}
+            aria-label={t('searchPatients')}
+            onClick={() => setIsAnyPatientSearchOpen(true)}
+          >
+            <Search className="h-4 w-4" />
+          </Button>
 
-                <div>
-                  <h3 className="mb-3">{t('vitalSigns')}</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="temperature">{t('temperature')}</Label>
-                      <Input
-                        id="temperature"
-                        placeholder={t('documentationTemperaturePlaceholder')}
-                        value={formData.temperature}
-                        onChange={(e) => setFormData({ ...formData, temperature: e.target.value })}
-                      />
+          <CommandDialog
+            open={isAnyPatientSearchOpen}
+            onOpenChange={setIsAnyPatientSearchOpen}
+            title={t('searchPatients')}
+            description={t('searchPatients')}
+          >
+            <CommandInput placeholder={t('searchPatients')} />
+            <CommandList>
+              <CommandEmpty>No patients found.</CommandEmpty>
+              <CommandGroup>
+                {patients.map((p) => (
+                  <CommandItem
+                    key={p.id}
+                    value={`${p.name} ${p.address ?? ''} ${p.diagnosis ?? ''}`}
+                    className="cursor-pointer"
+                    onSelect={() => {
+                      setIsAnyPatientSearchOpen(false);
+                      setSelectedPatient('all');
+                      setSearchedPatientId(p.id);
+                    }}
+                  >
+                    <div className="flex flex-col">
+                      <div>{p.name}</div>
+                      <div className="text-xs text-muted-foreground">{p.address || '—'}</div>
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="bloodPressure">{t('bloodPressure')}</Label>
-                      <Input
-                        id="bloodPressure"
-                        placeholder={t('documentationBloodPressurePlaceholder')}
-                        value={formData.bloodPressure}
-                        onChange={(e) => setFormData({ ...formData, bloodPressure: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="heartRate">{t('heartRate')} (bpm)</Label>
-                      <Input
-                        id="heartRate"
-                        placeholder={t('documentationHeartRatePlaceholder')}
-                        value={formData.heartRate}
-                        onChange={(e) => setFormData({ ...formData, heartRate: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="respiratoryRate">{t('respiratoryRate')}</Label>
-                      <Input
-                        id="respiratoryRate"
-                        placeholder={t('documentationRespiratoryRatePlaceholder')}
-                        value={formData.respiratoryRate}
-                        onChange={(e) => setFormData({ ...formData, respiratoryRate: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-2 col-span-2">
-                      <Label htmlFor="oxygenSaturation">{t('oxygenSaturation')}</Label>
-                      <Input
-                        id="oxygenSaturation"
-                        placeholder={t('documentationOxygenSaturationPlaceholder')}
-                        value={formData.oxygenSaturation}
-                        onChange={(e) => setFormData({ ...formData, oxygenSaturation: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </CommandDialog>
 
-                <Separator />
+          <NewDocumentationDialog
+            open={isDialogOpen}
+            onOpenChange={(open) => {
+              setIsDialogOpen(open);
+            }}
+            allowedPatientIds={todayVisitPatientIds ?? undefined}
+          />
 
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <h3>{t('medicationsAdministered')}</h3>
-                    <Button type="button" variant="outline" size="sm" onClick={addMedicationField}>
-                      <Plus className="h-4 w-4 mr-1" />
-                      {t('addMedication')}
-                    </Button>
-                  </div>
-                  <div className="space-y-3">
-                    {formData.medications.map((med, index) => (
-                      <div key={index} className="grid grid-cols-12 gap-2 items-end">
-                        <div className="col-span-5 space-y-2">
-                          <Label>{t('medicationName')}</Label>
-                          <Input
-                            placeholder={t('documentationMedicationNamePlaceholder')}
-                            value={med.name}
-                            onChange={(e) => updateMedication(index, 'name', e.target.value)}
-                          />
-                        </div>
-                        <div className="col-span-3 space-y-2">
-                          <Label>{t('dosage')}</Label>
-                          <Input
-                            placeholder={t('documentationDosagePlaceholder')}
-                            value={med.dosage}
-                            onChange={(e) => updateMedication(index, 'dosage', e.target.value)}
-                          />
-                        </div>
-                        <div className="col-span-3 space-y-2">
-                          <Label>{t('time')}</Label>
-                          <Input
-                            type="time"
-                            value={med.time}
-                            onChange={(e) => updateMedication(index, 'time', e.target.value)}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          {formData.medications.length > 1 && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeMedicationField(index)}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="activities">{t('activitiesMobility')}</Label>
-                    <Textarea
-                      id="activities"
-                      placeholder={t('documentationActivitiesPlaceholder')}
-                      value={formData.activities}
-                      onChange={(e) => setFormData({ ...formData, activities: e.target.value })}
-                      rows={3}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="meals">{t('mealsNutrition')}</Label>
-                    <Textarea
-                      id="meals"
-                      placeholder={t('documentationMealsPlaceholder')}
-                      value={formData.meals}
-                      onChange={(e) => setFormData({ ...formData, meals: e.target.value })}
-                      rows={3}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="notes">{t('clinicalNotesObservations')}</Label>
-                    <Textarea
-                      id="notes"
-                      placeholder={t('documentationNotesPlaceholder')}
-                      value={formData.notes}
-                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                      rows={4}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    {t('cancel')}
-                  </Button>
-                  <Button type="submit">{t('saveDocumentation')}</Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button
+            onClick={() => {
+              setIsDialogOpen(true);
+            }}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            {t('newDocumentation')}
+          </Button>
         </div>
       </div>
 
@@ -348,85 +189,106 @@ export function PatientDocumentation() {
                   <div>
                     <CardTitle>{patient.name}</CardTitle>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {new Date(doc.date).toLocaleDateString()} kl. {doc.time} • {t('documentedBy')} {doc.documentedByName}
+                      {new Date(doc.date).toLocaleDateString()} kl. {doc.time} • {t('documentedBy')} {currentEmployee?.name || '—'}
                     </p>
                   </div>
                   <FileText className="h-5 w-5 text-muted-foreground" />
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                {Object.values(doc.vitalSigns).some(v => v) && (
-                  <div>
-                    <h4 className="mb-2">{t('vitalSigns')}</h4>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                      {doc.vitalSigns.temperature && (
-                        <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">{t('temperature')}</div>
-                          <div>{doc.vitalSigns.temperature}</div>
-                        </div>
-                      )}
-                      {doc.vitalSigns.bloodPressure && (
-                        <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">BP</div>
-                          <div>{doc.vitalSigns.bloodPressure}</div>
-                        </div>
-                      )}
-                      {doc.vitalSigns.heartRate && (
-                        <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">{t('heartRate')}</div>
-                          <div>{doc.vitalSigns.heartRate} bpm</div>
-                        </div>
-                      )}
-                      {doc.vitalSigns.respiratoryRate && (
-                        <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">{t('respiratoryRate')}</div>
-                          <div>{doc.vitalSigns.respiratoryRate}</div>
-                        </div>
-                      )}
-                      {doc.vitalSigns.oxygenSaturation && (
-                        <div className="p-2 bg-accent/50 rounded">
-                          <div className="text-xs text-muted-foreground">{t('oxygenSaturation')}</div>
-                          <div>{doc.vitalSigns.oxygenSaturation}</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+                <div>
+                  <h4 className="mb-1">{t('clinicalNotes')}</h4>
+                  <p className="text-sm text-muted-foreground">{doc.notes || '—'}</p>
+                </div>
 
-                {doc.medications.length > 0 && (
-                  <div>
-                    <h4 className="mb-2">{t('medicationsAdministered')}</h4>
-                    <div className="space-y-1">
-                      {doc.medications.map((med, index) => (
-                        <div key={index} className="text-sm p-2 bg-accent/30 rounded">
-                          <span>{med.name}</span> - <span className="text-muted-foreground">{med.dosage}</span>
-                          {med.time && <span className="text-muted-foreground"> kl. {med.time}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {(() => {
+                  const hasVitals = Object.values(doc.vitalSigns).some(v => v);
+                  const hasMeds = doc.medications.length > 0;
+                  const hasActivities = Boolean(doc.activities);
+                  const hasMeals = Boolean(doc.meals);
+                  const hasExtra = hasVitals || hasMeds || hasActivities || hasMeals;
+                  if (!hasExtra) return null;
 
-                {doc.activities && (
-                  <div>
-                    <h4 className="mb-1">{t('activitiesMobility')}</h4>
-                    <p className="text-sm text-muted-foreground">{doc.activities}</p>
-                  </div>
-                )}
+                  return (
+                    <Accordion type="single" collapsible className="w-full">
+                      <AccordionItem
+                        value={`details-${doc.id}`}
+                        className="border-0 overflow-hidden rounded-md bg-muted/60"
+                      >
+                        <AccordionTrigger className="py-2 px-3 hover:no-underline">
+                          {t('showDetails')}
+                        </AccordionTrigger>
+                        <AccordionContent className="px-3 pt-2 pb-3 space-y-4">
+                          {hasVitals && (
+                            <div>
+                              <h4 className="mb-2">{t('vitalSigns')}</h4>
+                              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                {doc.vitalSigns.temperature && (
+                                  <div className="p-2 bg-background/70 rounded-md border border-border">
+                                    <div className="text-xs text-muted-foreground">{t('temperature')}</div>
+                                    <div>{doc.vitalSigns.temperature}</div>
+                                  </div>
+                                )}
+                                {doc.vitalSigns.bloodPressure && (
+                                  <div className="p-2 bg-background/70 rounded-md border border-border">
+                                    <div className="text-xs text-muted-foreground">BP</div>
+                                    <div>{doc.vitalSigns.bloodPressure}</div>
+                                  </div>
+                                )}
+                                {doc.vitalSigns.heartRate && (
+                                  <div className="p-2 bg-background/70 rounded-md border border-border">
+                                    <div className="text-xs text-muted-foreground">{t('heartRate')}</div>
+                                    <div>{doc.vitalSigns.heartRate} bpm</div>
+                                  </div>
+                                )}
+                                {doc.vitalSigns.respiratoryRate && (
+                                  <div className="p-2 bg-background/70 rounded-md border border-border">
+                                    <div className="text-xs text-muted-foreground">{t('respiratoryRate')}</div>
+                                    <div>{doc.vitalSigns.respiratoryRate}</div>
+                                  </div>
+                                )}
+                                {doc.vitalSigns.oxygenSaturation && (
+                                  <div className="p-2 bg-background/70 rounded-md border border-border">
+                                    <div className="text-xs text-muted-foreground">{t('oxygenSaturation')}</div>
+                                    <div>{doc.vitalSigns.oxygenSaturation}</div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
 
-                {doc.meals && (
-                  <div>
-                    <h4 className="mb-1">{t('mealsNutrition')}</h4>
-                    <p className="text-sm text-muted-foreground">{doc.meals}</p>
-                  </div>
-                )}
+                          {hasMeds && (
+                            <div>
+                              <h4 className="mb-2">{t('medicationsAdministered')}</h4>
+                              <div className="space-y-1">
+                                {doc.medications.map((med, index) => (
+                                  <div key={index} className="text-sm p-2 bg-background/70 rounded-md border border-border">
+                                    <span>{med.name}</span> - <span className="text-muted-foreground">{med.dosage}</span>
+                                    {med.time && <span className="text-muted-foreground"> kl. {med.time}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
-                {doc.notes && (
-                  <div>
-                    <h4 className="mb-1">{t('clinicalNotes')}</h4>
-                    <p className="text-sm text-muted-foreground">{doc.notes}</p>
-                  </div>
-                )}
+                          {hasActivities && (
+                            <div>
+                              <h4 className="mb-1">{t('activitiesMobility')}</h4>
+                              <p className="text-sm text-muted-foreground">{doc.activities}</p>
+                            </div>
+                          )}
+
+                          {hasMeals && (
+                            <div>
+                              <h4 className="mb-1">{t('mealsNutrition')}</h4>
+                              <p className="text-sm text-muted-foreground">{doc.meals}</p>
+                            </div>
+                          )}
+                        </AccordionContent>
+                      </AccordionItem>
+                    </Accordion>
+                  );
+                })()}
               </CardContent>
             </Card>
           );

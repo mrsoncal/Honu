@@ -1,13 +1,76 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { t } from '../i18n';
+import { Plus } from 'lucide-react';
+import { NewDocumentationDialog } from './NewDocumentationDialog';
 
 export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }) {
-  const { tasks, patients, visits, currentList, updateTask, effectiveWeekday } = useApp();
+  const { tasks, patients, visits, lists, currentList, updateTask, effectiveWeekday, listPatientAssignments } = useApp();
   const { onOpenCarePlan } = props;
+
+  const EVENING_LIST_ID_SUFFIX = '-evening';
+  const baseListId = (id: string): string =>
+    id.endsWith(EVENING_LIST_ID_SUFFIX) ? id.slice(0, -EVENING_LIST_ID_SUFFIX.length) : id;
+
+  const EVENING_CUTOFF_MINUTES = 15 * 60;
+  const parseTimeToMinutes = (time: string): number | null => {
+    const trimmed = time.trim();
+    const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+    if (!m) return null;
+    const hours = Number(m[1]);
+    const minutes = Number(m[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    return hours * 60 + minutes;
+  };
+  const isAfterEveningCutoff = (time: string | null | undefined): boolean => {
+    if (!time) return false;
+    const mins = parseTimeToMinutes(time);
+    if (mins === null) return false;
+    return mins > EVENING_CUTOFF_MINUTES;
+  };
+  const toEveningListId = (baseId: string): string => `${baseId}${EVENING_LIST_ID_SUFFIX}`;
+  const effectiveListIdForBase = (baseId: string, visitTime: string | null | undefined): string => {
+    return isAfterEveningCutoff(visitTime) ? toEveningListId(baseId) : baseId;
+  };
+
+  const [visitCompletion, setVisitCompletion] = useState<Record<string, true>>(() => {
+    try {
+      const raw = localStorage.getItem('honu.visitCompletion');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed as Record<string, true>;
+    } catch {
+      return {};
+    }
+  });
+
+  const [docDialogOpen, setDocDialogOpen] = useState(false);
+  const [docPatientId, setDocPatientId] = useState<string>('');
+
+  const [visitMoveOverrides, setVisitMoveOverrides] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem('honu.visitMoveOverrides');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+  const [moveVisitId, setMoveVisitId] = useState<string>('');
+  const [moveVisitTime, setMoveVisitTime] = useState<string>('');
+  const [moveToBaseListId, setMoveToBaseListId] = useState<string>('');
+  const [moveFromBaseListId, setMoveFromBaseListId] = useState<string>('');
 
   const effectiveDateISO = useMemo(() => {
     try {
@@ -21,6 +84,31 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
       return new Date().toISOString().slice(0, 10);
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('honu.visitCompletion', JSON.stringify(visitCompletion));
+    } catch {
+      // Ignore storage errors (private mode / quota).
+    }
+  }, [visitCompletion]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('honu.visitMoveOverrides', JSON.stringify(visitMoveOverrides));
+    } catch {
+      // Ignore storage errors (private mode / quota).
+    }
+  }, [visitMoveOverrides]);
+
+  const moveKeyForVisit = (visitId: string) => `${effectiveDateISO}|${visitId}`;
+  const effectiveListIdForVisit = (visit: (typeof visits)[number]): string => {
+    return visitMoveOverrides[moveKeyForVisit(visit.id)] ?? visit.listId;
+  };
+
+  const activeBaseLists = useMemo(() => {
+    return lists.filter((l) => l.active && !l.id.endsWith(EVENING_LIST_ID_SUFFIX));
+  }, [lists]);
 
   const getAgeFromBirthDate = (birthDate: string): number | null => {
     const d = new Date(birthDate);
@@ -36,20 +124,52 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
   };
 
   const listScopedTasks = useMemo(() => {
-    return currentList ? tasks.filter(task => task.listId === currentList.id) : [];
+    if (!currentList) return [];
+    const targetBase = baseListId(currentList.id);
+    return tasks.filter((task) => baseListId(task.listId) === targetBase);
   }, [tasks, currentList]);
+
+  const allowedPatientIds = useMemo(() => {
+    if (!currentList) return null;
+    const ids = new Set<string>();
+    for (const v of visits) {
+      if (v.listId === currentList.id) ids.add(v.patientId);
+
+      // Include one-time moved-in visits for today so documentation can be created for them.
+      if (effectiveListIdForVisit(v) === currentList.id) {
+        const isToday = v.date
+          ? v.date === effectiveDateISO
+          : v.weekdays.includes(effectiveWeekday) && (!v.endDate || effectiveDateISO <= v.endDate);
+        if (isToday) ids.add(v.patientId);
+      }
+    }
+    const assigned = listPatientAssignments[currentList.id] ?? [];
+    for (const pid of assigned) ids.add(pid);
+    return Array.from(ids);
+  }, [currentList, visits, listPatientAssignments, effectiveDateISO, effectiveWeekday, visitMoveOverrides]);
 
   const visitsForToday = useMemo(() => {
     if (!currentList) return [];
     return visits
-      .filter(v => v.listId === currentList.id)
+      .filter(v => effectiveListIdForVisit(v) === currentList.id)
       .filter(v => {
         if (v.date) return v.date === effectiveDateISO;
         if (!v.weekdays.includes(effectiveWeekday)) return false;
         if (v.endDate && effectiveDateISO > v.endDate) return false;
         return true;
       });
-  }, [visits, currentList, effectiveWeekday, effectiveDateISO]);
+  }, [visits, currentList, effectiveWeekday, effectiveDateISO, visitMoveOverrides]);
+
+  const openMoveDialog = (visit: (typeof visitsForToday)[number]) => {
+    const currentEffective = effectiveListIdForVisit(visit);
+    const currentBase = baseListId(currentEffective);
+    const defaultTarget = activeBaseLists.find((l) => l.id !== currentBase)?.id ?? currentBase;
+    setMoveVisitId(visit.id);
+    setMoveVisitTime(visit.time?.trim() ?? '');
+    setMoveFromBaseListId(currentBase);
+    setMoveToBaseListId(defaultTarget);
+    setMoveDialogOpen(true);
+  };
 
   const visitRowsForToday = useMemo(() => {
     const rows = visitsForToday
@@ -99,6 +219,80 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
 
   return (
     <div className="space-y-4">
+      <Dialog
+        open={moveDialogOpen}
+        onOpenChange={(open) => {
+          setMoveDialogOpen(open);
+          if (!open) {
+            setMoveVisitId('');
+            setMoveVisitTime('');
+            setMoveToBaseListId('');
+            setMoveFromBaseListId('');
+          }
+        }}
+      >
+        <DialogContent aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>{t('moveVisitDialogTitle')}</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="moveVisitToList">{t('moveVisitToList')}</Label>
+              <Select value={moveToBaseListId} onValueChange={setMoveToBaseListId}>
+                <SelectTrigger id="moveVisitToList">
+                  <SelectValue placeholder={t('selectList')} />
+                </SelectTrigger>
+                <SelectContent forceMount>
+                  {activeBaseLists.map((l) => (
+                    <SelectItem
+                      key={l.id}
+                      value={l.id}
+                      disabled={Boolean(moveFromBaseListId) && l.id === moveFromBaseListId}
+                      className={Boolean(moveFromBaseListId) && l.id === moveFromBaseListId ? 'text-muted-foreground' : undefined}
+                    >
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setMoveDialogOpen(false)}>
+                {t('cancel')}
+              </Button>
+              <Button
+                type="button"
+                disabled={!moveVisitId || !moveToBaseListId || (Boolean(moveFromBaseListId) && moveToBaseListId === moveFromBaseListId)}
+                onClick={() => {
+                  if (!moveVisitId) return;
+                  if (!moveToBaseListId) return;
+                  if (moveFromBaseListId && moveToBaseListId === moveFromBaseListId) return;
+                  const effectiveTarget = effectiveListIdForBase(moveToBaseListId, moveVisitTime);
+                  setVisitMoveOverrides((prev) => ({
+                    ...prev,
+                    [moveKeyForVisit(moveVisitId)]: effectiveTarget,
+                  }));
+                  setMoveDialogOpen(false);
+                }}
+              >
+                {t('moveVisitConfirm')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <NewDocumentationDialog
+        open={docDialogOpen}
+        onOpenChange={(open) => {
+          setDocDialogOpen(open);
+          if (!open) setDocPatientId('');
+        }}
+        patientId={docPatientId}
+        allowedPatientIds={allowedPatientIds ?? undefined}
+      />
             <div className="flex items-center justify-between">
               <div>
                 <h2>{t('visitsTitle')}</h2>
@@ -142,7 +336,10 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
                   return sum + v;
                 }, 0);
 
-                const allCompleted = visitTasks.length > 0 && visitTasks.every((tk) => tk.status === 'completed');
+                const allTasksCompleted = visitTasks.length > 0 && visitTasks.every((tk) => tk.status === 'completed');
+                const completionKey = `${effectiveDateISO}|${visit.id}`;
+                const markedComplete = visitTasks.length === 0 && Boolean(visitCompletion[completionKey]);
+                const allCompleted = allTasksCompleted || markedComplete;
 
                 return (
                   <Card
@@ -159,7 +356,12 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
                           <span className={allCompleted ? 'line-through text-muted-foreground' : undefined}>
                             {patient.name}
                           </span>{' '}
-                          <span className="text-foreground/70">({getAgeFromBirthDate(patient.birthDate) ?? '—'})</span>
+                          <Badge variant="secondary" className="ml-2 text-sm">
+                            {getAgeFromBirthDate(patient.birthDate) ?? '—'}
+                          </Badge>
+                          {patient.phone ? (
+                            <span className="ml-2 text-foreground/70">{patient.phone}</span>
+                          ) : null}
                         </span>
                         <div className="flex items-center gap-2">
                           <Button
@@ -173,23 +375,43 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
                           </Button>
                           <Button
                             type="button"
-                            onClick={() => handleToggleAllForVisit({
-                              visitId: visit.id,
-                              patientId: patient.id,
-                              visitTime: timeKey,
-                              isSpecial,
-                              allCompleted,
-                            })}
+                            onClick={() => {
+                              if (visitTasks.length === 0) {
+                                setVisitCompletion((prev) => {
+                                  const next = { ...prev };
+                                  if (next[completionKey]) delete next[completionKey];
+                                  else next[completionKey] = true;
+                                  return next;
+                                });
+                                return;
+                              }
+
+                              handleToggleAllForVisit({
+                                visitId: visit.id,
+                                patientId: patient.id,
+                                visitTime: timeKey,
+                                isSpecial,
+                                allCompleted: allTasksCompleted,
+                              });
+                            }}
                           >
                             {allCompleted ? t('markAllNotCompleted') : t('completeAllTasks')}
                           </Button>
                         </div>
                       </CardTitle>
-                      <p className="text-sm text-muted-foreground">{patient.diagnosis}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {Array.isArray(patient.tags) && patient.tags.length ? (
+                          <span className="text-destructive font-semibold">
+                            {patient.tags.map((tag) => `${tag},`).join(' ')}{' '}
+                          </span>
+                        ) : null}
+                        {visit.description?.trim() ? visit.description : patient.diagnosis}
+                      </p>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium text-foreground">{patient.address || '—'}</div>
+                        <div className="flex items-end justify-between gap-2">
                           <div className="flex items-center gap-2">
                             <Badge
                               variant={
@@ -207,10 +429,27 @@ export function TaskList(props: { onOpenCarePlan?: (patientId: string) => void }
                               {totalDurationMinutes} min
                             </Badge>
                           </div>
+
+                            <div className="flex items-center gap-2">
+                              <Button type="button" variant="outline" onClick={() => openMoveDialog(visit)}>
+                                {t('moveVisit')}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="icon"
+                                className="w-11"
+                                title={t('newDocumentation')}
+                                aria-label={t('newDocumentation')}
+                                onClick={() => {
+                                  setDocPatientId(patient.id);
+                                  setDocDialogOpen(true);
+                                }}
+                              >
+                                <Plus />
+                              </Button>
+                            </div>
                         </div>
-                        {visitTasks.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">—</div>
-                        ) : null}
                       </div>
                     </CardContent>
                   </Card>

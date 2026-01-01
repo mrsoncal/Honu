@@ -2,3 +2,19 @@
 @source '../**/*.{js,ts,jsx,tsx}';
 
 @import 'tw-animate-css';
+
+/* Care plan editor: allow the rich text area to grow with content. */
+.cp-quill .ql-container {
+	height: auto;
+}
+
+.cp-quill .ql-container.ql-snow {
+	border: 0;
+	border-radius: 0.375rem;
+}
+
+.cp-quill .ql-editor {
+	height: auto;
+	min-height: 2.5rem;
+	border-radius: 0.375rem;
+}

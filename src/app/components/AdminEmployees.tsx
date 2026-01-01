@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Employee } from '../types';
 import { Button } from './ui/button';
@@ -15,6 +15,9 @@ export function AdminEmployees() {
   const { employees, addEmployee, updateEmployee, deleteEmployee } = useApp();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+
+  const PAGE_SIZE = 10;
+  const [employeesPage, setEmployeesPage] = useState(1);
   const [formData, setFormData] = useState({
     name: '',
     username: '',
@@ -135,6 +138,18 @@ export function AdminEmployees() {
       deleteEmployee(id);
     }
   };
+
+  const employeesSorted = useMemo(() => {
+    return [...employees].sort((a, b) => a.name.localeCompare(b.name));
+  }, [employees]);
+
+  const employeesPageCount = Math.max(1, Math.ceil(employeesSorted.length / PAGE_SIZE));
+  const employeesPageSafe = Math.min(Math.max(1, employeesPage), employeesPageCount);
+  const pagedEmployees = employeesSorted.slice((employeesPageSafe - 1) * PAGE_SIZE, employeesPageSafe * PAGE_SIZE);
+
+  useEffect(() => {
+    if (employeesPage !== employeesPageSafe) setEmployeesPage(employeesPageSafe);
+  }, [employeesPage, employeesPageSafe]);
 
   return (
     <div className="space-y-4">
@@ -278,7 +293,7 @@ export function AdminEmployees() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {employees.map((employee) => (
+            {pagedEmployees.map((employee) => (
               <TableRow key={employee.id}>
                 <TableCell>{employee.name}</TableCell>
                 <TableCell className="font-mono text-sm">{employee.username}</TableCell>
@@ -318,6 +333,38 @@ export function AdminEmployees() {
           </TableBody>
         </Table>
       </div>
+
+      {employeesSorted.length > PAGE_SIZE ? (
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            {Math.min((employeesPageSafe - 1) * PAGE_SIZE + 1, employeesSorted.length)}-
+            {Math.min(employeesPageSafe * PAGE_SIZE, employeesSorted.length)} / {employeesSorted.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEmployeesPage((p) => Math.max(1, p - 1))}
+              disabled={employeesPageSafe <= 1}
+            >
+              Previous
+            </Button>
+            <div className="text-xs text-muted-foreground">
+              {employeesPageSafe} / {employeesPageCount}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEmployeesPage((p) => Math.min(employeesPageCount, p + 1))}
+              disabled={employeesPageSafe >= employeesPageCount}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

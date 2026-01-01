@@ -1,5 +1,97 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { Employee, Patient, Task, PatientDocument, Visit, VisitList, Weekday } from '../types';
+import { getDevDummyData } from './devDummyData';
+
+const EVENING_LIST_ID_SUFFIX = '-evening';
+const EVENING_LIST_NAME_SUFFIX = ' (evening)';
+const EVENING_CUTOFF_MINUTES = 15 * 60;
+
+const parseTimeToMinutes = (time: string): number | null => {
+  const trimmed = time.trim();
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return hours * 60 + minutes;
+};
+
+const isAfterEveningCutoff = (time: string | null | undefined): boolean => {
+  if (!time) return false;
+  const mins = parseTimeToMinutes(time);
+  if (mins === null) return false;
+  return mins > EVENING_CUTOFF_MINUTES;
+};
+
+const isEveningListId = (id: string): boolean => id.endsWith(EVENING_LIST_ID_SUFFIX);
+const toEveningListId = (baseId: string): string => `${baseId}${EVENING_LIST_ID_SUFFIX}`;
+
+const normalizeListIsEvening = (list: VisitList): VisitList => {
+  const derived = isEveningListId(list.id);
+  if (list.isEvening === derived) return list;
+  return { ...list, isEvening: derived };
+};
+
+const toEveningListName = (name: string): string => {
+  const trimmed = String(name).trim();
+  if (!trimmed) return EVENING_LIST_NAME_SUFFIX.trim();
+  return trimmed.endsWith(EVENING_LIST_NAME_SUFFIX) ? trimmed : `${trimmed}${EVENING_LIST_NAME_SUFFIX}`;
+};
+
+const ensureEveningSiblingLists = (items: VisitList[]): VisitList[] => {
+  const byId = new Map(items.map((l) => [l.id, l] as const));
+  const next: VisitList[] = [...items];
+
+  for (const baseRaw of items) {
+    const base = normalizeListIsEvening(baseRaw);
+    if (isEveningListId(base.id)) continue;
+    const siblingId = toEveningListId(base.id);
+    if (byId.has(siblingId)) continue;
+
+    const sibling: VisitList = {
+      id: siblingId,
+      name: toEveningListName(base.name),
+      description: base.description,
+      active: base.active,
+      isEvening: true,
+      color: base.color,
+    };
+    byId.set(siblingId, sibling);
+    next.push(sibling);
+  }
+
+  return next.map(normalizeListIsEvening);
+};
+
+const normalizeVisitListId = (visit: Visit): Visit => {
+  if (!visit.listId) return visit;
+  if (!visit.time) return visit;
+
+  const baseId = isEveningListId(visit.listId)
+    ? visit.listId.slice(0, -EVENING_LIST_ID_SUFFIX.length)
+    : visit.listId;
+
+  if (isAfterEveningCutoff(visit.time ?? null)) {
+    const desired = toEveningListId(baseId);
+    return visit.listId === desired ? visit : { ...visit, listId: desired };
+  }
+
+  // If it is not after the cutoff, it belongs to the base (day) list.
+  return visit.listId === baseId ? visit : { ...visit, listId: baseId };
+};
+
+const normalizeTaskListId = (task: Task): Task => {
+  if (!task.listId) return task;
+
+  const baseId = isEveningListId(task.listId)
+    ? task.listId.slice(0, -EVENING_LIST_ID_SUFFIX.length)
+    : task.listId;
+
+  const timeKey = (task.visitTime ?? '').trim();
+  const shouldBeEvening = timeKey && timeKey !== 'general' && isAfterEveningCutoff(timeKey);
+  const desired = shouldBeEvening ? toEveningListId(baseId) : baseId;
+  return task.listId === desired ? task : { ...task, listId: desired };
+};
 
 interface AppContextType {
   employees: Employee[];
@@ -10,6 +102,7 @@ interface AppContextType {
   lists: VisitList[];
   visits: Visit[];
   currentList: VisitList | null;
+  listPatientAssignments: Record<string, string[]>;
   effectiveWeekday: Weekday;
   devWeekdayOverride: Weekday | null;
   shiftDevWeekday: (delta: -1 | 1) => void;
@@ -33,6 +126,7 @@ interface AppContextType {
   updateVisit: (id: string, visit: Partial<Visit>) => void;
   deleteVisit: (id: string) => void;
   setCurrentList: (list: VisitList | null) => void;
+  assignPatientToList: (listId: string, patientId: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -133,6 +227,8 @@ const initialEmployeesSeed: SeedEmployee[] = [
 
 const initialEmployees: Employee[] = ensureEmployeesHaveUsernames(initialEmployeesSeed);
 
+const devDummy = getDevDummyData();
+
 const initialPatients: Patient[] = [
   {
     id: '1',
@@ -214,158 +310,10 @@ const initialPatients: Patient[] = [
     admissionDate: '2024-09-30',
     assignedEmployee: '2',
   },
+  ...devDummy.patients,
 ];
 
-const initialTasks: Task[] = [
-  // List 1
-  {
-    id: 'task-1',
-    patientId: '1',
-    patientName: 'Robert Williams',
-    visitTime: '09:00',
-    title: 'Wound dressing',
-    description: 'Assess surgical wound and change dressing.',
-    status: 'pending',
-    durationMinutes: 20,
-    listId: 'list-1',
-  },
-  {
-    id: 'task-2',
-    patientId: '1',
-    patientName: 'Robert Williams',
-    visitTime: '09:00',
-    title: 'Pain assessment',
-    description: 'Check pain score and review analgesics.',
-    status: 'pending',
-    durationMinutes: 10,
-    listId: 'list-1',
-  },
-  {
-    id: 'task-3',
-    patientId: '1',
-    patientName: 'Robert Williams',
-    visitTime: '15:30',
-    title: 'Mobility check',
-    description: 'Short walk with support and fall risk check.',
-    status: 'completed',
-    durationMinutes: 15,
-    listId: 'list-1',
-  },
-  {
-    id: 'task-4',
-    patientId: '3',
-    patientName: 'James Anderson',
-    visitTime: '10:15',
-    title: 'Vitals',
-    description: 'BP, pulse, SpO2, and short symptom check.',
-    status: 'pending',
-    durationMinutes: 15,
-    listId: 'list-1',
-  },
-  {
-    id: 'task-5',
-    patientId: '3',
-    patientName: 'James Anderson',
-    visitTime: '10:15',
-    title: 'Fluid balance',
-    description: 'Ask about weight change and edema.',
-    status: 'completed',
-    durationMinutes: 10,
-    listId: 'list-1',
-  },
-  {
-    id: 'task-6',
-    patientId: '6',
-    patientName: 'Aisha Khan',
-    visitTime: '16:00',
-    title: 'Medication administration',
-    description: 'Administer evening meds per list.',
-    status: 'pending',
-    durationMinutes: 20,
-    listId: 'list-1',
-  },
-
-  // List 2
-  {
-    id: 'task-7',
-    patientId: '2',
-    patientName: 'Margaret Thompson',
-    visitTime: '08:30',
-    title: 'Blood glucose',
-    description: 'Measure blood glucose and document result.',
-    status: 'pending',
-    durationMinutes: 10,
-    listId: 'list-2',
-  },
-  {
-    id: 'task-8',
-    patientId: '2',
-    patientName: 'Margaret Thompson',
-    visitTime: '08:30',
-    title: 'Medication review',
-    description: 'Verify insulin dose per plan.',
-    status: 'pending',
-    durationMinutes: 10,
-    listId: 'list-2',
-  },
-  {
-    id: 'task-9',
-    patientId: '5',
-    patientName: 'Daniel Price',
-    visitTime: '07:45',
-    title: 'Inhaler technique',
-    description: 'Observe inhaler technique and reinforce education.',
-    status: 'pending',
-    durationMinutes: 15,
-    listId: 'list-2',
-  },
-  {
-    id: 'task-10',
-    patientId: '8',
-    patientName: 'Linda Nguyen',
-    visitTime: '09:45',
-    title: 'Blood pressure',
-    description: 'Measure BP and document.',
-    status: 'completed',
-    durationMinutes: 10,
-    listId: 'list-2',
-  },
-  {
-    id: 'task-11',
-    patientId: '8',
-    patientName: 'Linda Nguyen',
-    visitTime: '09:45',
-    title: 'Education',
-    description: 'Lifestyle advice and medication adherence check.',
-    status: 'pending',
-    durationMinutes: 10,
-    listId: 'list-2',
-  },
-
-  // General sections
-  {
-    id: 'task-12',
-    patientId: '1',
-    patientName: 'Robert Williams',
-    visitTime: 'general',
-    title: 'Care plan note',
-    description: 'Review general notes and update as needed.',
-    status: 'pending',
-    durationMinutes: 5,
-    listId: 'list-1',
-  },
-  {
-    id: 'task-13',
-    patientId: '2',
-    patientName: 'Margaret Thompson',
-    visitTime: 'general',
-    title: 'Call GP office',
-    description: 'Follow up on prescription renewal.',
-    status: 'pending',
-    durationMinutes: 10,
-    listId: 'list-2',
-  },
-];
+const initialTasks: Task[] = [...devDummy.tasks];
 
 const initialDocuments: PatientDocument[] = [
   {
@@ -373,8 +321,8 @@ const initialDocuments: PatientDocument[] = [
     patientId: '1',
     date: '2024-12-29',
     time: '09:00',
-    documentedBy: 'dev',
-    documentedByName: 'Dev',
+    documentedBy: 'list-1',
+    documentedByName: 'List 1',
     vitalSigns: {
       temperature: '37,0°C',
       bloodPressure: '125/80',
@@ -393,154 +341,67 @@ const initialDocuments: PatientDocument[] = [
 ];
 
 const initialLists: VisitList[] = [
-  { id: 'list-1', name: 'List 1', description: 'Nord-rute', active: true },
-  { id: 'list-2', name: 'List 2', description: 'Sør-rute', active: true },
-  { id: 'list-3', name: 'List 3', description: 'Helgedekning', active: false },
-  { id: 'list-4', name: 'List 4', description: 'Sentrum', active: true },
-  { id: 'list-5', name: 'List 5', description: 'Ost-rute', active: true },
+  { id: 'list-1', name: 'List 1', description: 'Nord-rute', active: true, color: 'chart-1' },
+  { id: 'list-2', name: 'List 2', description: 'Sør-rute', active: true, color: 'chart-2' },
+  { id: 'list-3', name: 'List 3', description: 'Helgedekning', active: false, color: 'chart-3' },
 ];
 
 const initialVisits: Visit[] = [
-  // List 1 (Nord-rute)
   {
-    id: 'v-1',
+    id: '1',
     patientId: '1',
     patientName: 'Robert Williams',
     time: '09:00',
-    weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    weekdays: ['mon', 'wed', 'fri'],
     listId: 'list-1',
+    description: 'Morgenbesøk – sårstell',
+    notes: 'Morgenbesøk – sårstell',
   },
   {
-    id: 'v-2',
+    id: '2',
+    patientId: '2',
+    patientName: 'Margaret Thompson',
+    time: '10:00',
+    weekdays: ['tue', 'thu'],
+    listId: 'list-2',
+    description: 'Diabetesoppfølging',
+    notes: 'Diabetesoppfølging',
+  },
+  {
+    id: '3',
     patientId: '1',
     patientName: 'Robert Williams',
     time: '15:30',
-    weekdays: ['tue', 'thu'],
+    weekdays: ['tue'],
     listId: 'list-1',
+    description: 'Ettermiddagsoppfølging',
+    notes: 'Ettermiddagsoppfølging',
   },
-  {
-    id: 'v-3',
-    patientId: '3',
-    patientName: 'James Anderson',
-    time: '10:15',
-    weekdays: ['mon', 'tue', 'wed', 'fri'],
-    listId: 'list-1',
-  },
-  {
-    id: 'v-4',
-    patientId: '6',
-    patientName: 'Aisha Khan',
-    time: '16:00',
-    weekdays: ['tue', 'wed', 'thu', 'fri'],
-    listId: 'list-1',
-  },
-
-  // List 2 (Sør-rute)
-  {
-    id: 'v-5',
-    patientId: '2',
-    patientName: 'Margaret Thompson',
-    time: '08:30',
-    weekdays: ['tue', 'thu', 'sat'],
-    listId: 'list-2',
-  },
-  {
-    id: 'v-6',
-    patientId: '2',
-    patientName: 'Margaret Thompson',
-    time: '13:15',
-    weekdays: ['mon', 'wed', 'fri'],
-    listId: 'list-2',
-  },
-  {
-    id: 'v-7',
-    patientId: '5',
-    patientName: 'Daniel Price',
-    time: '07:45',
-    weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
-    listId: 'list-2',
-  },
-  {
-    id: 'v-8',
-    patientId: '8',
-    patientName: 'Linda Nguyen',
-    time: '09:45',
-    weekdays: ['tue', 'thu'],
-    listId: 'list-2',
-  },
-  {
-    id: 'v-9',
-    patientId: '8',
-    patientName: 'Linda Nguyen',
-    time: '14:30',
-    weekdays: ['mon', 'wed', 'fri'],
-    listId: 'list-2',
-  },
-
-  // List 3 (Helgedekning)
-  {
-    id: 'v-10',
-    patientId: '4',
-    patientName: 'Helen Carter',
-    time: '12:00',
-    weekdays: ['sat', 'sun'],
-    listId: 'list-3',
-  },
-  {
-    id: 'v-11',
-    patientId: '7',
-    patientName: 'Peter Hansen',
-    time: '11:30',
-    weekdays: ['sat', 'sun'],
-    listId: 'list-3',
-  },
-
-  // List 4 (Sentrum)
-  {
-    id: 'v-12',
-    patientId: '4',
-    patientName: 'Helen Carter',
-    time: '08:15',
-    weekdays: ['mon', 'tue', 'thu'],
-    listId: 'list-4',
-  },
-  {
-    id: 'v-13',
-    patientId: '7',
-    patientName: 'Peter Hansen',
-    time: '17:10',
-    weekdays: ['tue', 'wed', 'fri'],
-    listId: 'list-4',
-  },
-
-  // List 5 (Ost-rute)
-  {
-    id: 'v-14',
-    patientId: '6',
-    patientName: 'Aisha Khan',
-    time: '08:50',
-    weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
-    listId: 'list-5',
-  },
-  {
-    id: 'v-15',
-    patientId: '3',
-    patientName: 'James Anderson',
-    time: '18:00',
-    weekdays: ['tue', 'thu'],
-    listId: 'list-5',
-  },
+  ...devDummy.visits,
 ];
+
+const seededLists: VisitList[] = ensureEveningSiblingLists(initialLists).map(normalizeListIsEvening);
+const seededVisits: Visit[] = initialVisits.map(normalizeVisitListId);
+const seededTasks: Task[] = initialTasks.map(normalizeTaskListId);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees);
   const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(() => initialEmployees.find((e) => e.id === 'dev') ?? initialEmployees[0] ?? null);
   const [patients, setPatients] = useState<Patient[]>(initialPatients);
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>(seededTasks);
   const [documents, setDocuments] = useState<PatientDocument[]>(initialDocuments);
-  const [lists, setLists] = useState<VisitList[]>(initialLists);
-  const [visits, setVisits] = useState<Visit[]>(initialVisits);
-  const [currentList, setCurrentList] = useState<VisitList | null>(initialLists[0] ?? null);
+  const [lists, setLists] = useState<VisitList[]>(seededLists);
+  const [visits, setVisits] = useState<Visit[]>(seededVisits);
+  const [currentList, setCurrentList] = useState<VisitList | null>(() => seededLists.find((l) => l.id === initialLists[0]?.id) ?? seededLists[0] ?? null);
+  const [listPatientAssignments, setListPatientAssignments] = useState<Record<string, string[]>>({});
+
+  // One-time normalization/migration (useful if state existed before the evening split logic,
+  // e.g. during HMR or if visits/tasks were created before this change).
+  useEffect(() => {
+    setLists((prev) => ensureEveningSiblingLists(prev.map(normalizeListIsEvening)));
+    setVisits((prev) => prev.map(normalizeVisitListId));
+    setTasks((prev) => prev.map(normalizeTaskListId));
+  }, []);
 
   const weekdayOrder: Weekday[] = useMemo(() => ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], []);
 
@@ -650,15 +511,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deletePatient = (id: string) => {
-    setPatients(patients.filter(pat => pat.id !== id));
+    setPatients((prev) => prev.filter((pat) => pat.id !== id));
+    setVisits((prev) => prev.filter((v) => v.patientId !== id));
+    setTasks((prev) => prev.filter((t) => t.patientId !== id));
+    setDocuments((prev) => prev.filter((d) => d.patientId !== id));
+    setListPatientAssignments((prev) => {
+      const next: Record<string, string[]> = {};
+      for (const [listId, ids] of Object.entries(prev)) {
+        const filtered = (ids ?? []).filter((pid) => pid !== id);
+        if (filtered.length) next[listId] = filtered;
+      }
+      return next;
+    });
   };
 
   const addTask = (task: Task) => {
-    setTasks([...tasks, task]);
+    setTasks((prev) => [...prev, normalizeTaskListId(task)]);
   };
 
   const updateTask = (id: string, updatedTask: Partial<Task>) => {
-    setTasks(prev => prev.map(task => task.id === id ? { ...task, ...updatedTask } : task));
+    setTasks((prev) =>
+      prev.map((task) => {
+        if (task.id !== id) return task;
+        return normalizeTaskListId({ ...task, ...updatedTask } as Task);
+      }),
+    );
   };
 
   const deleteTask = (id: string) => {
@@ -674,29 +551,82 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const addList = (list: VisitList) => {
-    setLists([...lists, list]);
+    setLists((prev) => {
+      const next = [...prev, list];
+      return ensureEveningSiblingLists(next);
+    });
   };
 
   const updateList = (id: string, updatedList: Partial<VisitList>) => {
-    setLists(prev => prev.map(list => list.id === id ? { ...list, ...updatedList } : list));
-    setCurrentList(prev => (prev && prev.id === id) ? { ...prev, ...updatedList } : prev);
+    setLists((prev) => {
+      const next = prev.map((list) => (list.id === id ? { ...list, ...updatedList } : list));
+
+      if (!isEveningListId(id)) {
+        const siblingId = toEveningListId(id);
+        const base = next.find((l) => l.id === id);
+        if (base) {
+          const siblingName = toEveningListName(base.name);
+          return next.map((l) =>
+            l.id === siblingId
+              ? {
+                  ...l,
+                  name: siblingName,
+                  description: base.description,
+                  active: base.active,
+                  color: base.color,
+                }
+              : l,
+          );
+        }
+      }
+
+      return next;
+    });
+
+    setCurrentList((prev) => (prev && prev.id === id ? { ...prev, ...updatedList } : prev));
   };
 
   const deleteList = (id: string) => {
-    setLists(lists.filter(list => list.id !== id));
-    setVisits(visits.filter(visit => visit.listId !== id));
+    const idsToDelete = isEveningListId(id) ? [id] : [id, toEveningListId(id)];
+
+    setLists((prev) => prev.filter((list) => !idsToDelete.includes(list.id)));
+    setVisits((prev) => prev.filter((visit) => !idsToDelete.includes(visit.listId)));
+    setTasks((prev) => prev.filter((task) => !idsToDelete.includes(task.listId)));
+    setListPatientAssignments((prev) => {
+      const next = { ...prev };
+      for (const delId of idsToDelete) delete next[delId];
+      return next;
+    });
+    setCurrentList((prev) => {
+      if (!prev) return prev;
+      return idsToDelete.includes(prev.id) ? null : prev;
+    });
+  };
+
+  const assignPatientToList = (listId: string, patientId: string) => {
+    if (!listId || !patientId) return;
+    setListPatientAssignments((prev) => {
+      const existing = prev[listId] ?? [];
+      if (existing.includes(patientId)) return prev;
+      return { ...prev, [listId]: [...existing, patientId] };
+    });
   };
 
   const addVisit = (visit: Visit) => {
-    setVisits([...visits, visit]);
+    setVisits((prev) => [...prev, normalizeVisitListId(visit)]);
   };
 
   const updateVisit = (id: string, updatedVisit: Partial<Visit>) => {
-    setVisits(visits.map(vis => vis.id === id ? { ...vis, ...updatedVisit } : vis));
+    setVisits((prev) =>
+      prev.map((vis) => {
+        if (vis.id !== id) return vis;
+        return normalizeVisitListId({ ...vis, ...updatedVisit } as Visit);
+      }),
+    );
   };
 
   const deleteVisit = (id: string) => {
-    setVisits(visits.filter(vis => vis.id !== id));
+    setVisits((prev) => prev.filter((vis) => vis.id !== id));
   };
 
   return (
@@ -710,6 +640,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lists,
         visits,
         currentList,
+        listPatientAssignments,
         effectiveWeekday,
         devWeekdayOverride,
         shiftDevWeekday,
@@ -733,6 +664,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateVisit,
         deleteVisit,
         setCurrentList,
+        assignPatientToList,
       }}
     >
       {children}

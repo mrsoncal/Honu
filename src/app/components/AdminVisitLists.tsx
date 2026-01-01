@@ -8,17 +8,34 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Badge } from './ui/badge';
 import { Switch } from './ui/switch';
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
 import { Plus, Trash2, Pencil } from 'lucide-react';
 import { t } from '../i18n';
+import { getListColorStyle } from '../utils/listColors';
 
 export function AdminVisitLists() {
   const { lists, visits, addList, updateList, deleteList } = useApp();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [description, setDescription] = useState('');
+  const [createIsEvening, setCreateIsEvening] = useState(false);
+  const [createColor, setCreateColor] = useState<VisitList['color']>('chart-1');
+  const [createCustomColor, setCreateCustomColor] = useState<string>('#2563eb');
   const [editTarget, setEditTarget] = useState<VisitList | null>(null);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editColor, setEditColor] = useState<VisitList['color']>('chart-1');
+  const [editCustomColor, setEditCustomColor] = useState<string>('#2563eb');
+
+  const colorOptions: Array<NonNullable<VisitList['color']>> = ['chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5'];
+  const CUSTOM_COLOR_VALUE = '__custom__';
+  const isTokenColor = (v: string | undefined | null) => !!v && colorOptions.includes(v);
+  const colorStyle = (token?: VisitList['color'], opts?: { isEvening?: boolean }) => getListColorStyle(token, opts);
+  const plusStyle = (token?: VisitList['color']): React.CSSProperties => {
+    const raw = String(token ?? '').trim();
+    const accent = isTokenColor(raw) ? `var(--${raw})` : raw;
+    return accent ? { color: accent } : {};
+  };
 
   const usageByListId = useMemo(() => {
     return visits.reduce((acc, visit) => {
@@ -33,7 +50,7 @@ export function AdminVisitLists() {
     const nextNumber = (() => {
       const usedNumbers = new Set<number>();
       for (const list of lists) {
-        const match = /^List\s+(\d+)$/i.exec(list.name.trim());
+        const match = /^List\s+(\d+)(?:\s+\(.*\))?$/i.exec(list.name.trim());
         if (match) usedNumbers.add(Number(match[1]));
       }
       let n = 1;
@@ -41,15 +58,28 @@ export function AdminVisitLists() {
       return n;
     })();
 
+    const eveningSuffix = t('eveningSuffix');
+    const name = createIsEvening ? `List ${nextNumber}${eveningSuffix}` : `List ${nextNumber}`;
+
+    const defaultColor = (`chart-${((nextNumber - 1) % 5) + 1}` as NonNullable<VisitList['color']>);
+    const pickedColor = (createColor && isTokenColor(createColor))
+      ? createColor
+      : (createColor === CUSTOM_COLOR_VALUE ? createCustomColor : (createColor ?? defaultColor));
+
     const newList: VisitList = {
-      id: `list-${Date.now()}`,
-      name: `List ${nextNumber}`,
+      id: createIsEvening ? `list-${Date.now()}-evening` : `list-${Date.now()}`,
+      name,
       description: description.trim() || undefined,
       active: true,
+      isEvening: createIsEvening,
+      color: pickedColor,
     };
 
     addList(newList);
     setDescription('');
+    setCreateIsEvening(false);
+    setCreateColor('chart-1');
+    setCreateCustomColor('#2563eb');
     setIsDialogOpen(false);
   };
 
@@ -68,6 +98,12 @@ export function AdminVisitLists() {
     setEditTarget(list);
     setEditName(list.name);
     setEditDescription(list.description ?? '');
+    setEditColor(list.color ?? 'chart-1');
+    if (list.color && !isTokenColor(list.color)) {
+      setEditCustomColor(list.color);
+    } else {
+      setEditCustomColor('#2563eb');
+    }
     setIsEditDialogOpen(true);
   };
 
@@ -81,6 +117,9 @@ export function AdminVisitLists() {
     updateList(editTarget.id, {
       name: nextName,
       description: editDescription.trim() || undefined,
+      color: (editColor && isTokenColor(editColor))
+        ? editColor
+        : (editColor === CUSTOM_COLOR_VALUE ? editCustomColor : (editColor ?? 'chart-1')),
     });
 
     setIsEditDialogOpen(false);
@@ -114,6 +153,45 @@ export function AdminVisitLists() {
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder={t('descriptionPlaceholder')}
                 />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="listEvening">{t('eveningList')}</Label>
+                <Switch id="listEvening" checked={createIsEvening} onCheckedChange={setCreateIsEvening} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>{t('listColor')}</Label>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  value={isTokenColor(createColor) ? (createColor as string) : CUSTOM_COLOR_VALUE}
+                  onValueChange={(v) => setCreateColor((v as VisitList['color']) || 'chart-1')}
+                  className="w-full"
+                >
+                  {colorOptions.map((token) => (
+                    <ToggleGroupItem key={token} value={token} aria-label={token} className="flex-1">
+                      <span className="h-4 w-4 rounded-full ring-1 ring-border" style={colorStyle(token)} />
+                    </ToggleGroupItem>
+                  ))}
+                  <ToggleGroupItem key={CUSTOM_COLOR_VALUE} value={CUSTOM_COLOR_VALUE} aria-label="Custom color" className="flex-1">
+                    <span className="relative h-4 w-4" style={plusStyle(createCustomColor)}>
+                      <span className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-current" />
+                      <span className="absolute top-0 bottom-0 left-1/2 w-1 -translate-x-1/2 rounded-full bg-current" />
+                    </span>
+                  </ToggleGroupItem>
+                </ToggleGroup>
+
+                {createColor === CUSTOM_COLOR_VALUE && (
+                  <div className="pt-2">
+                    <Input
+                      type="color"
+                      value={createCustomColor}
+                      onChange={(e) => setCreateCustomColor(e.target.value)}
+                      aria-label="Custom list color"
+                      className="h-9 p-1"
+                    />
+                  </div>
+                )}
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
@@ -149,6 +227,41 @@ export function AdminVisitLists() {
                   placeholder={t('descriptionPlaceholder')}
                 />
               </div>
+
+              <div className="space-y-2">
+                <Label>{t('listColor')}</Label>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  value={isTokenColor(editColor) ? (editColor as string) : CUSTOM_COLOR_VALUE}
+                  onValueChange={(v) => setEditColor((v as VisitList['color']) || 'chart-1')}
+                  className="w-full"
+                >
+                  {colorOptions.map((token) => (
+                    <ToggleGroupItem key={token} value={token} aria-label={token} className="flex-1">
+                      <span className="h-4 w-4 rounded-full ring-1 ring-border" style={colorStyle(token)} />
+                    </ToggleGroupItem>
+                  ))}
+                  <ToggleGroupItem key={CUSTOM_COLOR_VALUE} value={CUSTOM_COLOR_VALUE} aria-label="Custom color" className="flex-1">
+                    <span className="relative h-4 w-4" style={plusStyle(editCustomColor)}>
+                      <span className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-current" />
+                      <span className="absolute top-0 bottom-0 left-1/2 w-1 -translate-x-1/2 rounded-full bg-current" />
+                    </span>
+                  </ToggleGroupItem>
+                </ToggleGroup>
+
+                {editColor === CUSTOM_COLOR_VALUE && (
+                  <div className="pt-2">
+                    <Input
+                      type="color"
+                      value={editCustomColor}
+                      onChange={(e) => setEditCustomColor(e.target.value)}
+                      aria-label="Custom list color"
+                      className="h-9 p-1"
+                    />
+                  </div>
+                )}
+              </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
                   {t('cancel')}
@@ -177,7 +290,15 @@ export function AdminVisitLists() {
               const count = usageByListId[list.id] || 0;
               return (
                 <TableRow key={list.id}>
-                  <TableCell>{list.name}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full ring-1 ring-border"
+                        style={colorStyle(list.color, { isEvening: Boolean(list.isEvening) || String(list.id).endsWith('-evening') })}
+                      />
+                      <span>{list.name}</span>
+                    </div>
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {list.description || '—'}
                   </TableCell>

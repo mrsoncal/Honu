@@ -3,6 +3,7 @@ import ReactQuill, { Quill } from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 
 import { Button } from './ui/button';
+import { Badge } from './ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input } from './ui/input';
@@ -11,7 +12,7 @@ import { Textarea } from './ui/textarea';
 import { t } from '../i18n';
 import { sanitizeRichTextHtml } from '../utils/sanitizeRichTextHtml';
 import { useApp } from '../context/AppContext';
-import { Task } from '../types';
+import { Task, Weekday } from '../types';
 
 const Parchment = Quill.import('parchment') as any;
 
@@ -36,15 +37,39 @@ export default function CarePlanEditorScreen(props: {
   patientName: string;
   initialHtml: string;
   plannedTimes: string[];
+  plannedTimeWeekdays?: Record<string, Weekday[]>;
   visitListId: string;
   mode: 'view' | 'edit';
   onBack: () => void;
   onSave?: (nextPlan: string) => void;
 }) {
-  const { patientId, patientName, initialHtml, plannedTimes, visitListId, mode, onBack, onSave } = props;
+  const { patientId, patientName, initialHtml, plannedTimes, plannedTimeWeekdays, visitListId, mode, onBack, onSave } = props;
   const { tasks, addTask, updateTask, deleteTask } = useApp();
   const quillRefs = useRef<Record<string, ReactQuill | null>>({});
   const lastRangeRefByKey = useRef<Record<string, { index: number; length: number } | null>>({});
+  const latestAutosaveRef = useRef<{ readOnly: boolean; serialized: string | null }>({ readOnly: mode === 'view', serialized: null });
+
+  const weekdayLabels = useMemo(() => {
+    const map: Record<Weekday, string> = {
+      mon: 'Mon',
+      tue: 'Tue',
+      wed: 'Wed',
+      thu: 'Thu',
+      fri: 'Fri',
+      sat: 'Sat',
+      sun: 'Sun',
+    };
+    const order: Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    return { map, order };
+  }, []);
+
+  const weekdaysForKey = (key: string): Weekday[] => {
+    if (key === 'general') return [];
+    const raw = plannedTimeWeekdays?.[key] ?? [];
+    const set = new Set<Weekday>();
+    for (const d of raw) set.add(d);
+    return weekdayLabels.order.filter((d) => set.has(d));
+  };
 
   const timeKeys = useMemo(() => {
     const cleaned = (plannedTimes ?? []).map(t => t.trim()).filter(Boolean);
@@ -106,6 +131,37 @@ export default function CarePlanEditorScreen(props: {
   });
 
   const readOnly = mode === 'view';
+
+  const buildSerializedPlan = (args: { keys: string[]; byTime: Record<string, string> }): string => {
+    const cleanedByTime: Record<string, string> = {};
+    for (const k of args.keys) {
+      cleanedByTime[k] = sanitizeRichTextHtml(args.byTime[k] ?? '');
+    }
+    const next: CarePlanV2 = { version: 2, byTime: cleanedByTime };
+    return JSON.stringify(next);
+  };
+
+  const autosaveNow = () => {
+    if (readOnly) return;
+    onSave?.(buildSerializedPlan({ keys: timeKeys, byTime }));
+  };
+
+  useEffect(() => {
+    // Keep the latest serialized plan in a ref so unmount autosave doesn't depend on byTime in deps.
+    latestAutosaveRef.current = {
+      readOnly,
+      serialized: readOnly ? null : buildSerializedPlan({ keys: timeKeys, byTime }),
+    };
+  });
+
+  useEffect(() => {
+    return () => {
+      const snap = latestAutosaveRef.current;
+      if (snap.readOnly) return;
+      if (!snap.serialized) return;
+      onSave?.(snap.serialized);
+    };
+  }, [onSave]);
 
   const modules = useMemo(
     () => ({
@@ -242,7 +298,6 @@ export default function CarePlanEditorScreen(props: {
   const tasksForThisPatient = useMemo(() => {
     return tasks
       .filter(tk => tk.patientId === patientId)
-      .filter(tk => tk.listId === visitListId)
       .sort((a, b) => {
         const aKey = a.visitTime?.trim() || 'general';
         const bKey = b.visitTime?.trim() || 'general';
@@ -250,7 +305,7 @@ export default function CarePlanEditorScreen(props: {
         if (timeDiff !== 0) return timeDiff;
         return a.title.localeCompare(b.title);
       });
-  }, [tasks, patientId, visitListId]);
+  }, [tasks, patientId]);
 
   const tasksByTimeKey = useMemo(() => {
     return tasksForThisPatient.reduce((acc, task) => {
@@ -284,7 +339,7 @@ export default function CarePlanEditorScreen(props: {
   const saveTaskFromDialog = () => {
     const title = taskForm.title.trim();
     const description = taskForm.description.trim();
-    if (!title || !description) return;
+    if (!title) return;
 
     const visitTime = taskDialogTimeKey;
 
@@ -416,19 +471,21 @@ export default function CarePlanEditorScreen(props: {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button type="button" className="bg-foreground text-background hover:bg-foreground/90" onClick={onBack}>
+          <Button
+            type="button"
+            className="bg-foreground text-background hover:bg-foreground/90"
+            onClick={() => {
+              autosaveNow();
+              onBack();
+            }}
+          >
             {t('back')}
           </Button>
           {!readOnly && (
             <Button
               type="button"
               onClick={() => {
-                const cleanedByTime: Record<string, string> = {};
-                for (const k of timeKeys) {
-                  cleanedByTime[k] = sanitizeRichTextHtml(byTime[k] ?? '');
-                }
-                const next: CarePlanV2 = { version: 2, byTime: cleanedByTime };
-                onSave?.(JSON.stringify(next));
+                autosaveNow();
               }}
             >
               {t('save')}
@@ -438,10 +495,7 @@ export default function CarePlanEditorScreen(props: {
       </div>
 
       <Card>
-        <CardHeader className="py-3">
-          <CardTitle className="text-sm">{t('carePlan')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3 py-6">
           {!readOnly && (
             <div id="care-plan-toolbar" className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1">
@@ -591,52 +645,82 @@ export default function CarePlanEditorScreen(props: {
           )}
 
           {readOnly ? (
-            <div className="rounded-md border">
-              <div className="space-y-4 p-4">
-                {viewSections.map((s) => {
-                  const sectionTasks = tasksByTimeKey[s.key] ?? [];
-                  return (
-                    <div key={s.key} className="space-y-2">
-                      <div className="text-xs text-muted-foreground">{s.label}</div>
-                      {s.empty ? (
-                        <div className="text-sm text-muted-foreground">—</div>
-                      ) : (
-                        <div className="ql-snow">
-                          <div className="ql-editor p-0" dangerouslySetInnerHTML={{ __html: s.html }} />
-                        </div>
-                      )}
+            <div className="space-y-4">
+              {viewSections.map((s) => {
+                const sectionTasks = tasksByTimeKey[s.key] ?? [];
+                const days = weekdaysForKey(s.key);
+                return (
+                  <div key={s.key} className="space-y-2">
+                    {s.key === 'general' ? null : (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge variant="destructive" className="rounded-full px-3 py-1 text-sm font-semibold">
+                          {s.label}
+                        </Badge>
+                        {days.map((d) => (
+                          <Badge key={`${s.key}-${d}`} variant="secondary" className="text-xs">
+                            {weekdayLabels.map[d]}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {s.empty ? (
+                      <div className="text-sm text-muted-foreground">—</div>
+                    ) : (
+                      <div className="ql-snow">
+                        <div className="ql-editor p-0" dangerouslySetInnerHTML={{ __html: s.html }} />
+                      </div>
+                    )}
 
-                      <div className="text-xs text-muted-foreground">{t('tasksTitle')}</div>
-                      {sectionTasks.length === 0 ? (
-                        <div className="text-sm text-muted-foreground">—</div>
-                      ) : (
-                        <div className="space-y-2">
-                          {sectionTasks.map((task) => (
-                            <div key={task.id} className="rounded-md border p-3">
+                    <div className="text-xs text-muted-foreground">{t('tasksTitle')}</div>
+                    {sectionTasks.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">—</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {sectionTasks.map((task) => (
+                          <div key={task.id} className="rounded-md border p-3">
+                            <div className="flex items-center justify-between gap-3">
                               <div className="font-medium truncate">{task.title}</div>
-                              <div className="text-sm text-muted-foreground">{task.description}</div>
+                              <div className="text-sm font-semibold text-foreground">
+                                {(Number.isFinite(task.durationMinutes) ? task.durationMinutes : 0)} min
+                              </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                            <div className="text-sm text-muted-foreground">{task.description}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="space-y-4">
               {timeKeys.map((key) => {
                 const label = key === 'general' ? t('carePlan') : key;
                 const sectionTasks = tasksByTimeKey[key] ?? [];
+                const days = weekdaysForKey(key);
                 return (
                   <div key={key} className="space-y-2">
-                    <div className="text-sm font-medium">{label}</div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {key === 'general' ? (
+                        <div className="text-sm font-medium">{label}</div>
+                      ) : (
+                        <Badge variant="destructive" className="rounded-full px-3 py-1 text-sm font-semibold">
+                          {label}
+                        </Badge>
+                      )}
+                      {days.map((d) => (
+                        <Badge key={`${key}-${d}`} variant="secondary" className="text-xs">
+                          {weekdayLabels.map[d]}
+                        </Badge>
+                      ))}
+                    </div>
                     <div className="rounded-md border" onMouseDown={() => setActiveKey(key)}>
                       <ReactQuill
                         ref={(el) => {
                           quillRefs.current[key] = el;
                         }}
+                        className="cp-quill"
                         theme="snow"
                         value={byTime[key] ?? ''}
                         onChange={(next) => {
@@ -658,13 +742,17 @@ export default function CarePlanEditorScreen(props: {
                         modules={modules}
                         formats={formats}
                         placeholder={t('carePlanPlaceholder')}
-                        style={{ minHeight: 220 }}
                       />
                     </div>
 
                     <div className="flex items-center justify-between">
                       <div className="text-xs text-muted-foreground">{t('tasksTitle')}</div>
-                      <Button type="button" size="sm" variant="outline" onClick={() => openTaskDialog(key)}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => openTaskDialog(key)}
+                        className="bg-foreground text-background hover:bg-foreground/90"
+                      >
                         {t('addTask')}
                       </Button>
                     </div>
@@ -676,7 +764,12 @@ export default function CarePlanEditorScreen(props: {
                         sectionTasks.map((task) => (
                           <div key={task.id} className="flex items-start justify-between gap-3 rounded-md border p-3">
                             <div className="min-w-0">
-                              <div className="font-medium truncate">{task.title}</div>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="font-medium truncate">{task.title}</div>
+                                <div className="text-sm font-semibold text-foreground">
+                                  {(Number.isFinite(task.durationMinutes) ? task.durationMinutes : 0)} min
+                                </div>
+                              </div>
                               <div className="text-sm text-muted-foreground">{task.description}</div>
                             </div>
                             <div className="flex gap-2">
@@ -711,13 +804,20 @@ export default function CarePlanEditorScreen(props: {
           <DialogHeader>
             <DialogTitle>{editingTask ? t('edit') : t('addTask')}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveTaskFromDialog();
+            }}
+          >
             <div className="space-y-2">
               <Label htmlFor="cpTaskTitle">{t('taskTitle')}</Label>
               <Input
                 id="cpTaskTitle"
                 value={taskForm.title}
                 onChange={(e) => setTaskForm((p) => ({ ...p, title: e.target.value }))}
+                required
               />
             </div>
             <div className="space-y-2">
@@ -743,11 +843,11 @@ export default function CarePlanEditorScreen(props: {
               <Button type="button" variant="outline" onClick={() => setTaskDialogOpen(false)}>
                 {t('cancel')}
               </Button>
-              <Button type="button" onClick={saveTaskFromDialog}>
+              <Button type="submit">
                 {t('save')}
               </Button>
             </div>
-          </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

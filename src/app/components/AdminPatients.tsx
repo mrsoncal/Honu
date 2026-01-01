@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Patient, Task, Visit, Weekday } from '../types';
 import { Button } from './ui/button';
@@ -9,10 +9,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from './ui/context-menu';
 import { Plus, Pencil, Trash2, FilePenLine } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { t } from '../i18n';
+import { getListColorStyle } from '../utils/listColors';
 
 import clipboardStarIcon from '../../../images/clipboard_start_icon.png';
 
@@ -25,8 +27,13 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
   const [patientSearch, setPatientSearch] = useState('');
   const [visitListSearch, setVisitListSearch] = useState('');
 
+  const PAGE_SIZE = 10;
+  const [patientsPage, setPatientsPage] = useState(1);
+  const [visitGroupsPage, setVisitGroupsPage] = useState(1);
+
   const [isSpecialTaskDialogOpen, setIsSpecialTaskDialogOpen] = useState(false);
   const [specialTaskPatient, setSpecialTaskPatient] = useState<Patient | null>(null);
+  const [specialTaskListTouched, setSpecialTaskListTouched] = useState(false);
   const [specialTaskForm, setSpecialTaskForm] = useState({
     listId: '',
     time: '09:00',
@@ -49,19 +56,128 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     return ids[0] ?? null;
   };
 
+  const parseTimeToMinutes = (time: string): number | null => {
+    const trimmed = String(time ?? '').trim();
+    const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+    if (!m) return null;
+    const hours = Number(m[1]);
+    const minutes = Number(m[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    return hours * 60 + minutes;
+  };
+
+  const timeIsAfterEveningRecommendationCutoff = (time: string): boolean => {
+    const mins = parseTimeToMinutes(time);
+    if (mins === null) return false;
+    return mins >= 14 * 60 + 30;
+  };
+
+  const toEveningListId = (baseId: string): string => `${baseId}-evening`;
+  const toDayListId = (eveningId: string): string => eveningId.endsWith('-evening') ? eveningId.slice(0, -'-evening'.length) : eveningId;
+
+  const recommendListIdForSpecialTask = (args: { patientId: string; time: string }): string | null => {
+    const target = parseTimeToMinutes(args.time);
+    if (target === null) return null;
+
+    const activeListIds = new Set(lists.filter((l) => l.active).map((l) => l.id));
+
+    let best: { listId: string; diff: number } | null = null;
+    for (const v of visits) {
+      if (v.patientId !== args.patientId) continue;
+      if (!activeListIds.has(v.listId)) continue;
+      if (!v.time) continue;
+      if (v.kind === 'special-task') continue;
+
+      const mins = parseTimeToMinutes(v.time);
+      if (mins === null) continue;
+      const diff = Math.abs(mins - target);
+      if (!best || diff < best.diff) best = { listId: v.listId, diff };
+    }
+
+    const picked = best?.listId ?? null;
+    if (!picked) return null;
+
+    if (!timeIsAfterEveningRecommendationCutoff(args.time)) return picked;
+
+    // After 14:30 we always recommend an evening list.
+    const baseId = toDayListId(picked);
+    const eveningId = toEveningListId(baseId);
+    if (activeListIds.has(eveningId)) return eveningId;
+    return picked;
+  };
+
   type VisitGridRow = {
     rowId: string;
-    timesByWeekday: Partial<Record<Weekday, string | null>>;
+    listId: string;
+    time: string | null;
+    description: string;
+    weekdays: Partial<Record<Weekday, true>>;
+  };
+
+  const makeRowId = (args: { listId: string; time: string | null }) => {
+    const timeKey = args.time === null ? '__null__' : args.time;
+    return `${args.listId}::${timeKey}`;
+  };
+
+  const normalizeVisitGridRows = (rows: VisitGridRow[]): VisitGridRow[] => {
+    const byKey = new Map<string, VisitGridRow>();
+    const order: string[] = [];
+
+    for (const row of rows) {
+      const listId = String(row.listId);
+      const time = row.time === null ? null : String(row.time);
+      const key = makeRowId({ listId, time });
+      const existing = byKey.get(key);
+      if (!existing) order.push(key);
+
+      const mergedWeekdays: Partial<Record<Weekday, true>> = {
+        ...(existing?.weekdays ?? {}),
+        ...(row.weekdays ?? {}),
+      };
+
+      const existingDesc = typeof existing?.description === 'string' ? existing.description : '';
+      const nextDesc = typeof row.description === 'string' ? row.description : '';
+      const mergedDescription = existingDesc.trim() ? existingDesc : nextDesc;
+
+      byKey.set(key, {
+        rowId: key,
+        listId,
+        time,
+        description: mergedDescription,
+        weekdays: mergedWeekdays,
+      });
+    }
+
+    const result: VisitGridRow[] = [];
+    for (const key of order) {
+      const row = byKey.get(key);
+      if (!row) continue;
+      if (Object.keys(row.weekdays).length === 0) continue;
+      result.push(row);
+    }
+
+    return result.sort((a, b) => {
+      const aMins = a.time ? parseTimeToMinutes(a.time) : null;
+      const bMins = b.time ? parseTimeToMinutes(b.time) : null;
+
+      const aKey = aMins === null ? Number.POSITIVE_INFINITY : aMins;
+      const bKey = bMins === null ? Number.POSITIVE_INFINITY : bMins;
+      if (aKey !== bKey) return aKey - bKey;
+
+      return String(a.listId).localeCompare(String(b.listId));
+    });
   };
 
   const [visitGridRows, setVisitGridRows] = useState<VisitGridRow[]>([]);
   const [cellDialogOpen, setCellDialogOpen] = useState(false);
+  const [copiedPlannedVisit, setCopiedPlannedVisit] = useState<{ time: string; description: string } | null>(null);
   const [activeCell, setActiveCell] = useState<{
     rowId: string | null;
     weekday: Weekday;
     hasExistingValue: boolean;
   } | null>(null);
   const [cellTimeDraft, setCellTimeDraft] = useState('08:00');
+  const [cellDescriptionDraft, setCellDescriptionDraft] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     birthDate: '',
@@ -70,6 +186,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     diagnosis: '',
     admissionDate: '',
     assignedEmployee: '',
+    tags: [] as string[],
   });
 
   const getAgeFromBirthDate = (birthDate: string): number | null => {
@@ -87,7 +204,6 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
 
   const [visitFormData, setVisitFormData] = useState({
     patientId: '',
-    listId: '',
   });
 
   const weekdayOptions: Array<{ key: Weekday; label: string }> = [
@@ -136,6 +252,14 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
       return haystack.includes(q);
     });
   }, [patients, patientSearch]);
+
+  const filteredPatientsSorted = useMemo(() => {
+    return [...filteredPatients].sort((a, b) => a.name.localeCompare(b.name));
+  }, [filteredPatients]);
+
+  useEffect(() => {
+    setPatientsPage(1);
+  }, [patientSearch]);
 
   const visitGroups = useMemo(() => {
     const patientNameById = new Map<string, string>();
@@ -196,6 +320,26 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     });
   }, [visitGroups, visitListSearch, lists]);
 
+  useEffect(() => {
+    setVisitGroupsPage(1);
+  }, [visitListSearch]);
+
+  const patientsPageCount = Math.max(1, Math.ceil(filteredPatientsSorted.length / PAGE_SIZE));
+  const patientsPageSafe = Math.min(Math.max(1, patientsPage), patientsPageCount);
+  const pagedPatients = filteredPatientsSorted.slice((patientsPageSafe - 1) * PAGE_SIZE, patientsPageSafe * PAGE_SIZE);
+
+  useEffect(() => {
+    if (patientsPage !== patientsPageSafe) setPatientsPage(patientsPageSafe);
+  }, [patientsPage, patientsPageSafe]);
+
+  const visitGroupsPageCount = Math.max(1, Math.ceil(filteredVisitGroups.length / PAGE_SIZE));
+  const visitGroupsPageSafe = Math.min(Math.max(1, visitGroupsPage), visitGroupsPageCount);
+  const pagedVisitGroups = filteredVisitGroups.slice((visitGroupsPageSafe - 1) * PAGE_SIZE, visitGroupsPageSafe * PAGE_SIZE);
+
+  useEffect(() => {
+    if (visitGroupsPage !== visitGroupsPageSafe) setVisitGroupsPage(visitGroupsPageSafe);
+  }, [visitGroupsPage, visitGroupsPageSafe]);
+
   const formatWeekdays = (days: Weekday[]) => {
     const order: Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
     const map: Record<Weekday, string> = {
@@ -211,52 +355,43 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
   };
 
   const buildGridRowsFromVisits = (existing: Visit[]): VisitGridRow[] => {
-    return existing.map((visit) => {
-      const timesByWeekday: Partial<Record<Weekday, string | null>> = {};
+    const rows: VisitGridRow[] = [];
+    for (const visit of existing) {
+      const time = typeof visit.time === 'string' && visit.time.trim() ? visit.time.trim() : null;
+      const weekdays: Partial<Record<Weekday, true>> = {};
       for (const d of visit.weekdays) {
-        timesByWeekday[d] = visit.time ?? null;
+        weekdays[d] = true;
       }
-      return {
-        rowId: visit.id,
-        timesByWeekday,
-      };
-    });
+      rows.push({
+        rowId: makeRowId({ listId: visit.listId, time }),
+        listId: visit.listId,
+        time,
+        description: (visit.description ?? '').trim(),
+        weekdays,
+      });
+    }
+    return normalizeVisitGridRows(rows);
   };
 
   const buildVisitsFromGridRows = (args: {
     rows: VisitGridRow[];
     patient: Patient;
-    listId: string;
   }): Visit[] => {
-    const { rows, patient, listId } = args;
+    const { rows, patient } = args;
 
     const result: Visit[] = [];
     for (const row of rows) {
-      const groups = new Map<string, { time: string | null; weekdays: Weekday[] }>();
-
-      (Object.keys(row.timesByWeekday) as Weekday[]).forEach((weekday) => {
-        const time = row.timesByWeekday[weekday];
-        if (time === undefined) return;
-        const key = time === null ? '__null__' : time;
-        const existing = groups.get(key);
-        if (existing) {
-          existing.weekdays.push(weekday);
-        } else {
-          groups.set(key, { time, weekdays: [weekday] });
-        }
+      const weekdays = (Object.keys(row.weekdays) as Weekday[]).filter((d) => row.weekdays[d]);
+      if (!weekdays.length) continue;
+      result.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        patientId: patient.id,
+        patientName: patient.name,
+        listId: row.listId,
+        weekdays,
+        time: row.time ?? undefined,
+        description: row.description.trim() ? row.description.trim() : undefined,
       });
-
-      for (const g of groups.values()) {
-        if (!g.weekdays.length) continue;
-        result.push({
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          patientId: patient.id,
-          patientName: patient.name,
-          listId,
-          weekdays: g.weekdays,
-          time: g.time ?? undefined,
-        });
-      }
     }
     return result;
   };
@@ -267,6 +402,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
       setFormData({
         ...patient,
         assignedEmployee: patient.assignedEmployee || 'unassigned',
+        tags: Array.isArray(patient.tags) ? patient.tags : [],
       });
     } else {
       setEditingPatient(null);
@@ -278,6 +414,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
         diagnosis: '',
         admissionDate: new Date().toISOString().split('T')[0],
         assignedEmployee: 'unassigned',
+        tags: [],
       });
     }
     setIsDialogOpen(true);
@@ -293,6 +430,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
       diagnosis: formData.diagnosis,
       admissionDate: formData.admissionDate,
       assignedEmployee: formData.assignedEmployee && formData.assignedEmployee !== 'unassigned' ? formData.assignedEmployee : undefined,
+      tags: Array.isArray(formData.tags) && formData.tags.length ? formData.tags : undefined,
     };
 
     if (editingPatient) {
@@ -321,13 +459,8 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
 
   const handleOpenVisitDialog = (patient?: Patient) => {
     const patientId = patient?.id || '';
-    const preferredListId = currentList?.id ?? lists.find(l => l.active)?.id ?? '';
-    const fallbackExistingListId = patientId ? getAnyListIdForPatient(patientId) : null;
-    const listId = preferredListId || fallbackExistingListId || '';
-    setVisitFormData({ patientId, listId });
-    const existing = visits
-      .filter((v) => v.patientId === patientId && v.listId === listId)
-      .filter((v) => v.kind !== 'special-task');
+    setVisitFormData({ patientId });
+    const existing = visits.filter((v) => v.patientId === patientId).filter((v) => v.kind !== 'special-task');
     setVisitGridRows(buildGridRowsFromVisits(existing));
     setIsVisitDialogOpen(true);
   };
@@ -346,14 +479,17 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
   };
 
   const handleOpenSpecialTaskDialog = (patient: Patient) => {
+    const defaultTime = '09:00';
+    const recommendedListId = recommendListIdForSpecialTask({ patientId: patient.id, time: defaultTime });
     const preferredListId = currentList?.id ?? lists.find(l => l.active)?.id ?? '';
     const fallbackExistingListId = getAnyListIdForPatient(patient.id);
-    const listId = preferredListId || fallbackExistingListId || '';
+    const listId = recommendedListId || preferredListId || fallbackExistingListId || '';
 
     setSpecialTaskPatient(patient);
+    setSpecialTaskListTouched(false);
     setSpecialTaskForm({
       listId,
-      time: '09:00',
+      time: defaultTime,
       type: 'one-time',
       date: getOsloDateISO(),
       endDate: '',
@@ -364,6 +500,24 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     });
     setIsSpecialTaskDialogOpen(true);
   };
+
+  const recommendedSpecialTaskListId = useMemo(() => {
+    if (!isSpecialTaskDialogOpen || !specialTaskPatient) return null;
+    return recommendListIdForSpecialTask({ patientId: specialTaskPatient.id, time: specialTaskForm.time });
+  }, [isSpecialTaskDialogOpen, specialTaskPatient, specialTaskForm.time, visits, lists]);
+
+  const recommendedSpecialTaskListName = useMemo(() => {
+    if (!recommendedSpecialTaskListId) return null;
+    return lists.find((l) => l.id === recommendedSpecialTaskListId)?.name ?? null;
+  }, [recommendedSpecialTaskListId, lists]);
+
+  useEffect(() => {
+    if (!isSpecialTaskDialogOpen || !specialTaskPatient) return;
+    if (specialTaskListTouched) return;
+    if (!recommendedSpecialTaskListId) return;
+    if (specialTaskForm.listId === recommendedSpecialTaskListId) return;
+    setSpecialTaskForm((p) => ({ ...p, listId: recommendedSpecialTaskListId }));
+  }, [isSpecialTaskDialogOpen, specialTaskPatient, specialTaskListTouched, recommendedSpecialTaskListId, specialTaskForm.listId]);
 
   const effectiveWeekdayFallback = (): Weekday => {
     // Keep it simple for the dialog default; planned weekday itself doesn't matter much.
@@ -459,56 +613,172 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
   const openCellEditor = (args: {
     rowId: string | null;
     weekday: Weekday;
-    currentValue?: string | null;
+    hasExistingValue: boolean;
+    currentTime: string | null;
+    currentListId: string;
+    currentDescription: string;
   }) => {
     setActiveCell({
       rowId: args.rowId,
       weekday: args.weekday,
-      hasExistingValue: args.currentValue !== undefined,
+      hasExistingValue: args.hasExistingValue,
     });
-    setCellTimeDraft(args.currentValue && args.currentValue !== null ? args.currentValue : '08:00');
+    setCellTimeDraft(args.currentTime && args.currentTime !== null ? args.currentTime : '08:00');
+    setCellListDraft(args.currentListId);
+    setCellDescriptionDraft(args.currentDescription ?? '');
     setCellDialogOpen(true);
   };
 
-  const applyCellTime = (args: { rowId: string; weekday: Weekday; time: string | null }) => {
-    setVisitGridRows((prev) =>
-      prev.map((row) => {
-        if (row.rowId !== args.rowId) return row;
-        return {
-          ...row,
-          timesByWeekday: {
-            ...row.timesByWeekday,
-            [args.weekday]: args.time,
-          },
-        };
-      })
-    );
+  const defaultPlannedVisitListId = useMemo(() => {
+    return currentList?.id ?? lists.find((l) => l.active)?.id ?? lists[0]?.id ?? '';
+  }, [currentList?.id, lists]);
+
+  const listColorStyle = (args: { listId: string; time?: string | null }) => {
+    const listId = args.listId;
+    const list = lists.find((l) => l.id === listId);
+    const token = list?.color;
+
+    // Some older planned visits may still be stored on the base (day) list even if they
+    // belong to the evening list by time. Render them as "evening" when an evening sibling exists.
+    const explicitEvening = Boolean(list?.isEvening) || String(listId).endsWith('-evening');
+    const baseId = String(listId).endsWith('-evening') ? String(listId).slice(0, -'-evening'.length) : String(listId);
+    const hasEveningSibling = lists.some((l) => l.id === `${baseId}-evening`);
+    const mins = args.time ? parseTimeToMinutes(args.time) : null;
+    const timeSuggestsEvening = mins !== null && mins >= 14 * 60 + 30;
+    const isEvening = explicitEvening || (hasEveningSibling && timeSuggestsEvening);
+
+    return token ? getListColorStyle(token, { isEvening }) : ({ backgroundColor: 'var(--muted)' } as const);
   };
 
-  const removeCellTime = (args: { rowId: string; weekday: Weekday }) => {
+  const listNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const l of lists) map.set(l.id, l.name);
+    return map;
+  }, [lists]);
+
+  const [cellListDraft, setCellListDraft] = useState<string>('');
+
+  const applyCell = (args: {
+    fromRowId: string | null;
+    weekday: Weekday;
+    time: string | null;
+    listId: string;
+    description: string;
+  }) => {
+    const nextListId = args.listId;
+    if (!nextListId) return;
+
+    const nextDescription = String(args.description ?? '');
+
+    setVisitGridRows((prev) => {
+      const rows = [...prev];
+
+      // Remove from source row if needed.
+      if (args.fromRowId) {
+        for (let i = 0; i < rows.length; i++) {
+          if (rows[i].rowId !== args.fromRowId) continue;
+          const nextWeekdays = { ...rows[i].weekdays };
+          delete nextWeekdays[args.weekday];
+          rows[i] = { ...rows[i], weekdays: nextWeekdays };
+          break;
+        }
+      }
+
+      // Add into target row.
+      const targetRowId = makeRowId({ listId: nextListId, time: args.time });
+      const targetIndex = rows.findIndex((r) => r.rowId === targetRowId);
+      if (targetIndex >= 0) {
+        rows[targetIndex] = {
+          ...rows[targetIndex],
+          description: nextDescription,
+          weekdays: { ...rows[targetIndex].weekdays, [args.weekday]: true },
+        };
+      } else {
+        rows.push({
+          rowId: targetRowId,
+          listId: nextListId,
+          time: args.time,
+          description: nextDescription,
+          weekdays: { [args.weekday]: true },
+        });
+      }
+
+      return normalizeVisitGridRows(rows);
+    });
+  };
+
+  const pasteCopiedPlannedVisitTime = (args: { rowId: string | null; weekday: Weekday }) => {
+    if (!copiedPlannedVisit) return;
+
+    // If pasting into an existing row, keep its listId.
+    if (args.rowId) {
+      setVisitGridRows((prev) => {
+        const sourceRow = prev.find((r) => r.rowId === args.rowId);
+        const listId = sourceRow?.listId ?? defaultPlannedVisitListId;
+        if (!listId) return prev;
+
+        const rows = [...prev];
+        // Remove from the source row.
+        if (args.rowId) {
+          for (let i = 0; i < rows.length; i++) {
+            if (rows[i].rowId !== args.rowId) continue;
+            const nextWeekdays = { ...rows[i].weekdays };
+            delete nextWeekdays[args.weekday];
+            rows[i] = { ...rows[i], weekdays: nextWeekdays };
+            break;
+          }
+        }
+
+        // Add into the target row with the copied time.
+        const targetRowId = makeRowId({ listId, time: copiedPlannedVisit.time });
+        const targetIndex = rows.findIndex((r) => r.rowId === targetRowId);
+        if (targetIndex >= 0) {
+          rows[targetIndex] = {
+            ...rows[targetIndex],
+            description: copiedPlannedVisit.description,
+            weekdays: { ...rows[targetIndex].weekdays, [args.weekday]: true },
+          };
+        } else {
+          rows.push({
+            rowId: targetRowId,
+            listId,
+            time: copiedPlannedVisit.time,
+            description: copiedPlannedVisit.description,
+            weekdays: { [args.weekday]: true },
+          });
+        }
+
+        return normalizeVisitGridRows(rows);
+      });
+      return;
+    }
+
+    applyCell({
+      fromRowId: null,
+      weekday: args.weekday,
+      time: copiedPlannedVisit.time,
+      listId: defaultPlannedVisitListId,
+      description: copiedPlannedVisit.description,
+    });
+  };
+
+  const removeCell = (args: { rowId: string; weekday: Weekday }) => {
     setVisitGridRows((prev) => {
       const next = prev
         .map((row) => {
           if (row.rowId !== args.rowId) return row;
-
-          const nextTimes = { ...row.timesByWeekday };
-          delete nextTimes[args.weekday];
-
-          return {
-            ...row,
-            timesByWeekday: nextTimes,
-          };
+          const nextWeekdays = { ...row.weekdays };
+          delete nextWeekdays[args.weekday];
+          return { ...row, weekdays: nextWeekdays };
         })
-        .filter((row) => Object.keys(row.timesByWeekday).length > 0);
+        .filter((row) => Object.keys(row.weekdays).length > 0);
 
-      return next;
+      return normalizeVisitGridRows(next);
     });
   };
 
-  const reloadGridFromSelection = (args: { patientId: string; listId: string }) => {
-    const existing = visits
-      .filter((v) => v.patientId === args.patientId && v.listId === args.listId)
-      .filter((v) => v.kind !== 'special-task');
+  const reloadGridForPatient = (patientId: string) => {
+    const existing = visits.filter((v) => v.patientId === patientId).filter((v) => v.kind !== 'special-task');
     setVisitGridRows(buildGridRowsFromVisits(existing));
   };
 
@@ -517,14 +787,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     const patient = patients.find(p => p.id === visitFormData.patientId);
     if (!patient) return;
 
-    if (!visitFormData.listId) {
-      alert(t('pleaseSelectList'));
-      return;
-    }
-
-    const existing = visits
-      .filter((v) => v.patientId === patient.id && v.listId === visitFormData.listId)
-      .filter((v) => v.kind !== 'special-task');
+    const existing = visits.filter((v) => v.patientId === patient.id).filter((v) => v.kind !== 'special-task');
     for (const v of existing) {
       deleteVisit(v.id);
     }
@@ -532,16 +795,14 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
     const nextVisits = buildVisitsFromGridRows({
       rows: visitGridRows,
       patient,
-      listId: visitFormData.listId,
     });
 
     for (const v of nextVisits) {
       addVisit(v);
     }
-    
+
     setVisitFormData({
       patientId: '',
-      listId: '',
     });
     setVisitGridRows([]);
     setIsVisitDialogOpen(false);
@@ -638,10 +899,29 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                 />
               </div>
               <div className="space-y-2">
-                <Label>{t('carePlan')}</Label>
-                <p className="text-sm text-muted-foreground">
-                  {t('editCarePlan')}
-                </p>
+                <Label>{t('tags')}</Label>
+                <div className="flex flex-wrap gap-3">
+                  {['HLR-', 'RESP-', 'DIA', 'DIA 2'].map((tag) => {
+                    const checked = formData.tags.includes(tag);
+                    return (
+                      <label key={tag} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(v) => {
+                            const nextChecked = v === true;
+                            setFormData((p) => {
+                              const next = new Set(p.tags);
+                              if (nextChecked) next.add(tag);
+                              else next.delete(tag);
+                              return { ...p, tags: Array.from(next) };
+                            });
+                          }}
+                        />
+                        {tag}
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="assignedEmployee">{t('assignedNurse')}</Label>
@@ -685,14 +965,13 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
               <TableHead>{t('fullName')}</TableHead>
               <TableHead>{t('age')}</TableHead>
               <TableHead>{t('contact')}</TableHead>
-              <TableHead>{t('diagnosis')}</TableHead>
               <TableHead>{t('assignedNurse')}</TableHead>
-              <TableHead>{t('admissionDate')}</TableHead>
+              <TableHead>{t('diagnosis')}</TableHead>
               <TableHead className="text-right">{t('actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredPatients.map((patient) => (
+            {pagedPatients.map((patient) => (
               <TableRow key={patient.id}>
                 <TableCell>{patient.name}</TableCell>
                 <TableCell>{getAgeFromBirthDate(patient.birthDate) ?? '—'}</TableCell>
@@ -702,9 +981,8 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                     <div className="text-muted-foreground text-xs">{patient.address}</div>
                   </div>
                 </TableCell>
-                <TableCell>{patient.diagnosis}</TableCell>
                 <TableCell>{getAssignedEmployeeName(patient.assignedEmployee)}</TableCell>
-                <TableCell>{new Date(patient.admissionDate).toLocaleDateString()}</TableCell>
+                <TableCell>{patient.diagnosis}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
                     <Button
@@ -760,6 +1038,38 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
         </Table>
       </div>
 
+      {filteredPatientsSorted.length > PAGE_SIZE ? (
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            {Math.min((patientsPageSafe - 1) * PAGE_SIZE + 1, filteredPatientsSorted.length)}-
+            {Math.min(patientsPageSafe * PAGE_SIZE, filteredPatientsSorted.length)} / {filteredPatientsSorted.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPatientsPage((p) => Math.max(1, p - 1))}
+              disabled={patientsPageSafe <= 1}
+            >
+              Previous
+            </Button>
+            <div className="text-xs text-muted-foreground">
+              {patientsPageSafe} / {patientsPageCount}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPatientsPage((p) => Math.min(patientsPageCount, p + 1))}
+              disabled={patientsPageSafe >= patientsPageCount}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <Dialog open={isSpecialTaskDialogOpen} onOpenChange={setIsSpecialTaskDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
           <DialogHeader>
@@ -771,34 +1081,17 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
               <div className="text-xs text-muted-foreground">{t('specialTaskHelper')}</div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="stList">{t('list')}</Label>
-              <Select
-                value={specialTaskForm.listId}
-                onValueChange={(value) => setSpecialTaskForm((p) => ({ ...p, listId: value }))}
-                required
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t('selectList')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {lists.filter((l) => l.active).map((l) => (
-                    <SelectItem key={l.id} value={l.id}>
-                      {l.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="stTime">{t('time')}</Label>
                 <Input
                   id="stTime"
+                  type="time"
                   value={specialTaskForm.time}
-                  onChange={(e) => setSpecialTaskForm((p) => ({ ...p, time: e.target.value }))}
-                  placeholder="09:00"
+                  onChange={(e) => {
+                    const nextTime = e.target.value;
+                    setSpecialTaskForm((p) => ({ ...p, time: nextTime }));
+                  }}
                 />
               </div>
               <div className="space-y-2">
@@ -816,6 +1109,36 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="stList">{t('list')}</Label>
+                {recommendedSpecialTaskListName && (
+                  <span className="text-xs text-muted-foreground">
+                    {t('recommendedList', { name: recommendedSpecialTaskListName })}
+                  </span>
+                )}
+              </div>
+              <Select
+                value={specialTaskForm.listId}
+                onValueChange={(value) => {
+                  setSpecialTaskListTouched(true);
+                  setSpecialTaskForm((p) => ({ ...p, listId: value }));
+                }}
+                required
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t('selectList')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {lists.filter((l) => l.active).map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {specialTaskForm.type === 'one-time' ? (
@@ -921,10 +1244,9 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
               <Select
                 value={visitFormData.patientId}
                 onValueChange={(value) => {
-                  const nextListId = visitFormData.listId || currentList?.id || lists.find((l) => l.active)?.id || '';
-                  const next = { ...visitFormData, patientId: value, listId: nextListId };
+                  const next = { ...visitFormData, patientId: value };
                   setVisitFormData(next);
-                  if (value && nextListId) reloadGridFromSelection({ patientId: value, listId: nextListId });
+                  if (value) reloadGridForPatient(value);
                   if (!value) setVisitGridRows([]);
                 }}
                 required
@@ -936,34 +1258,6 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                   {patients.map((patient) => (
                     <SelectItem key={patient.id} value={patient.id}>
                       {patient.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="listId">{t('list')}</Label>
-              <Select
-                value={visitFormData.listId}
-                onValueChange={(value) => {
-                  const next = { ...visitFormData, listId: value };
-                  setVisitFormData(next);
-                  if (!value) {
-                    setVisitGridRows([]);
-                    return;
-                  }
-                  if (next.patientId) reloadGridFromSelection({ patientId: next.patientId, listId: value });
-                }}
-                required
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t('selectList')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {lists.map((list) => (
-                    <SelectItem key={list.id} value={list.id}>
-                      {list.name}{list.active ? '' : t('inactiveSuffix')}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -991,34 +1285,84 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                     {visitGridRows.map((row) => (
                       <TableRow key={row.rowId}>
                         {weekdayOptions.map((day) => {
-                          const v = row.timesByWeekday[day.key];
-                          const hasValue = v !== undefined;
-                          const label = v === null ? t('noTimeSet') : v;
+                          const hasValue = Boolean(row.weekdays[day.key]);
+                          const timeLabel = row.time === null ? t('noTimeSet') : row.time;
+                          const listLabel = listNameById.get(row.listId) ?? row.listId;
 
                           return (
                             <TableCell key={day.key} className="text-center">
-                              {hasValue ? (
-                                <Button
-                                  type="button"
-                                  variant={v === null ? 'outline' : 'secondary'}
-                                  size="sm"
-                                  className="h-7 px-3 rounded-full"
-                                  onClick={() => openCellEditor({ rowId: row.rowId, weekday: day.key, currentValue: v })}
-                                >
-                                  {label}
-                                </Button>
-                              ) : (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  onClick={() => openCellEditor({ rowId: row.rowId, weekday: day.key, currentValue: undefined })}
-                                  aria-label={t('addTime')}
-                                >
-                                  <Plus className="h-4 w-4" />
-                                </Button>
-                              )}
+                              <ContextMenu>
+                                <ContextMenuTrigger asChild>
+                                  {hasValue ? (
+                                    <Button
+                                      type="button"
+                                      variant={row.time === null ? 'outline' : 'secondary'}
+                                      size="sm"
+                                      className={
+                                        row.time === null
+                                          ? 'h-7 px-3 rounded-full border-transparent'
+                                          : 'h-7 px-3 rounded-full'
+                                      }
+                                      title={listLabel}
+                                      style={row.time === null ? undefined : listColorStyle({ listId: row.listId, time: row.time })}
+                                      onClick={() =>
+                                        openCellEditor({
+                                          rowId: row.rowId,
+                                          weekday: day.key,
+                                          hasExistingValue: true,
+                                          currentTime: row.time,
+                                          currentListId: row.listId,
+                                          currentDescription: row.description,
+                                        })
+                                      }
+                                    >
+                                      {timeLabel}
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      title={listLabel}
+                                      onClick={() =>
+                                        openCellEditor({
+                                          rowId: row.rowId,
+                                          weekday: day.key,
+                                          hasExistingValue: false,
+                                          currentTime: row.time,
+                                          currentListId: row.listId,
+                                          currentDescription: row.description,
+                                        })
+                                      }
+                                      aria-label={t('addTime')}
+                                    >
+                                      <Plus className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </ContextMenuTrigger>
+                                <ContextMenuContent>
+                                  <ContextMenuItem
+                                    disabled={typeof row.time !== 'string' || !row.time.trim()}
+                                    onSelect={() => {
+                                      if (typeof row.time !== 'string') return;
+                                      const trimmed = row.time.trim();
+                                      if (!trimmed) return;
+                                      setCopiedPlannedVisit({ time: trimmed, description: row.description ?? '' });
+                                    }}
+                                  >
+                                    {t('copyTime')}
+                                  </ContextMenuItem>
+                                  <ContextMenuItem
+                                    disabled={!copiedPlannedVisit}
+                                    onSelect={() => {
+                                      pasteCopiedPlannedVisitTime({ rowId: row.rowId, weekday: day.key });
+                                    }}
+                                  >
+                                    {t('pasteTime')}
+                                  </ContextMenuItem>
+                                </ContextMenuContent>
+                              </ContextMenu>
                             </TableCell>
                           );
                         })}
@@ -1029,17 +1373,41 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                     <TableRow>
                       {weekdayOptions.map((day) => (
                         <TableCell key={day.key} className="text-center">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => openCellEditor({ rowId: null, weekday: day.key, currentValue: undefined })}
-                            aria-label={t('addTime')}
-                            disabled={!visitFormData.patientId || !visitFormData.listId}
-                          >
-                            <Plus className="h-4 w-4" />
-                          </Button>
+                          <ContextMenu>
+                            <ContextMenuTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() =>
+                                  openCellEditor({
+                                    rowId: null,
+                                    weekday: day.key,
+                                    hasExistingValue: false,
+                                    currentTime: null,
+                                    currentListId: defaultPlannedVisitListId,
+                                    currentDescription: '',
+                                  })
+                                }
+                                aria-label={t('addTime')}
+                                disabled={!visitFormData.patientId}
+                              >
+                                <Plus className="h-4 w-4" />
+                              </Button>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent>
+                              <ContextMenuItem disabled>{t('copyTime')}</ContextMenuItem>
+                              <ContextMenuItem
+                                disabled={!copiedPlannedVisit || !visitFormData.patientId}
+                                onSelect={() => {
+                                  pasteCopiedPlannedVisitTime({ rowId: null, weekday: day.key });
+                                }}
+                              >
+                                {t('pasteTime')}
+                              </ContextMenuItem>
+                            </ContextMenuContent>
+                          </ContextMenu>
                         </TableCell>
                       ))}
                     </TableRow>
@@ -1076,6 +1444,32 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
               />
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="cellList">{t('list')}</Label>
+              <Select value={cellListDraft} onValueChange={(v) => setCellListDraft(v)}>
+                <SelectTrigger id="cellList">
+                  <SelectValue placeholder={t('selectList')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {lists.map((list) => (
+                    <SelectItem key={list.id} value={list.id}>
+                      {list.name}{list.active ? '' : t('inactiveSuffix')}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="cellDescription">{t('visitDescription')}</Label>
+              <Input
+                id="cellDescription"
+                value={cellDescriptionDraft}
+                onChange={(e) => setCellDescriptionDraft(e.target.value)}
+                className="h-8"
+              />
+            </div>
+
             <div className="flex items-center justify-between gap-2">
               <div>
                 {activeCell?.rowId && activeCell?.hasExistingValue ? (
@@ -1084,7 +1478,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                     variant="destructive"
                     onClick={() => {
                       if (!activeCell?.rowId) return;
-                      removeCellTime({ rowId: activeCell.rowId, weekday: activeCell.weekday });
+                      removeCell({ rowId: activeCell.rowId, weekday: activeCell.weekday });
                       setCellDialogOpen(false);
                       setActiveCell(null);
                     }}
@@ -1113,18 +1507,16 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                     if (!activeCell) return;
                     const time = cellTimeDraft.trim() ? cellTimeDraft : '08:00';
 
-                    if (activeCell.rowId) {
-                      applyCellTime({ rowId: activeCell.rowId, weekday: activeCell.weekday, time });
-                    } else {
-                      const newRowId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-                      setVisitGridRows((prev) => [
-                        ...prev,
-                        {
-                          rowId: newRowId,
-                          timesByWeekday: { [activeCell.weekday]: time },
-                        },
-                      ]);
-                    }
+                    const listId = cellListDraft || defaultPlannedVisitListId;
+                    if (!listId) return;
+
+                    applyCell({
+                      fromRowId: activeCell.rowId,
+                      weekday: activeCell.weekday,
+                      time,
+                      listId,
+                      description: cellDescriptionDraft,
+                    });
 
                     setCellDialogOpen(false);
                     setActiveCell(null);
@@ -1235,7 +1627,7 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredVisitGroups.map((row) => {
+              {pagedVisitGroups.map((row) => {
                 const patient = patients.find((p) => p.id === row.patientId);
 
                 return (
@@ -1252,13 +1644,17 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                                 type="button"
                                 variant="secondary"
                                 size="sm"
-                                className="h-7 px-3 rounded-full"
+                                className="h-7 px-3 rounded-full border-transparent"
                                 onClick={() => openSingleVisitEditor(visit)}
                                 title={t('editVisit')}
                               >
                                 {timeLabel}
                               </Button>
-                              <Badge variant="outline" className="text-xs">
+                              <Badge
+                                variant="outline"
+                                className="text-xs border-transparent"
+                                style={listColorStyle({ listId: visit.listId, time: visit.time ?? null })}
+                              >
                                 {listName}
                               </Badge>
                               {formatWeekdays(visit.weekdays).map((label) => (
@@ -1277,11 +1673,8 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
                           variant="ghost"
                           size="sm"
                           onClick={() => {
-                            const preferredListId = currentList?.id ?? lists.find((l) => l.active)?.id ?? '';
-                            const fallbackExistingListId = getAnyListIdForPatient(row.patientId);
-                            const listId = preferredListId || fallbackExistingListId || '';
-                            setVisitFormData({ patientId: row.patientId, listId });
-                            if (row.patientId && listId) reloadGridFromSelection({ patientId: row.patientId, listId });
+                            setVisitFormData({ patientId: row.patientId });
+                            if (row.patientId) reloadGridForPatient(row.patientId);
                             setIsVisitDialogOpen(true);
                           }}
                         >
@@ -1294,6 +1687,38 @@ export function AdminPatients(props: { onEditCarePlan?: (patientId: string) => v
               })}
             </TableBody>
           </Table>
+
+          {filteredVisitGroups.length > PAGE_SIZE ? (
+            <div className="flex items-center justify-between pt-4">
+              <div className="text-xs text-muted-foreground">
+                {Math.min((visitGroupsPageSafe - 1) * PAGE_SIZE + 1, filteredVisitGroups.length)}-
+                {Math.min(visitGroupsPageSafe * PAGE_SIZE, filteredVisitGroups.length)} / {filteredVisitGroups.length}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVisitGroupsPage((p) => Math.max(1, p - 1))}
+                  disabled={visitGroupsPageSafe <= 1}
+                >
+                  Previous
+                </Button>
+                <div className="text-xs text-muted-foreground">
+                  {visitGroupsPageSafe} / {visitGroupsPageCount}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVisitGroupsPage((p) => Math.min(visitGroupsPageCount, p + 1))}
+                  disabled={visitGroupsPageSafe >= visitGroupsPageCount}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

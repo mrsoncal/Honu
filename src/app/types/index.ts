@@ -19,6 +19,7 @@ export interface Patient {
   diagnosis: string;
   admissionDate: string;
   assignedEmployee?: string;
+  tags?: string[];
   plan?: string;
 }
 
@@ -29,6 +30,9 @@ export interface VisitList {
   name: string;
   description?: string;
   active: boolean;
+  isEvening?: boolean;
+  // Theme tokens (chart-1..chart-5) or a custom CSS color (e.g. '#ff0000').
+  color?: string;
 }
 
 export interface Visit {
@@ -38,6 +42,7 @@ export interface Visit {
   weekdays: Weekday[];
   time?: string;
   listId: string;
+  description?: string;
   notes?: string;
   date?: string;
   endDate?: string;
