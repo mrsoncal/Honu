@@ -322,7 +322,7 @@ const initialDocuments: PatientDocument[] = [
     date: '2024-12-29',
     time: '09:00',
     documentedBy: 'list-1',
-    documentedByName: 'List 1',
+    documentedByName: 'Liste 1',
     vitalSigns: {
       temperature: '37,0°C',
       bloodPressure: '125/80',
@@ -383,9 +383,9 @@ const initialDocuments: PatientDocument[] = [
 ];
 
 const initialLists: VisitList[] = [
-  { id: 'list-1', name: 'List 1', description: 'Nord-rute', active: true, color: 'chart-1' },
-  { id: 'list-2', name: 'List 2', description: 'Sør-rute', active: true, color: 'chart-2' },
-  { id: 'list-3', name: 'List 3', description: 'Helgedekning', active: false, color: 'chart-3' },
+  { id: 'list-1', name: 'Liste 1', description: 'Nord-rute', active: true, color: 'chart-1' },
+  { id: 'list-2', name: 'Liste 2', description: 'Sør-rute', active: true, color: 'chart-2' },
+  { id: 'list-3', name: 'Liste 3', description: 'Helgedekning', active: false, color: 'chart-3' },
 ];
 
 const initialVisits: Visit[] = [
